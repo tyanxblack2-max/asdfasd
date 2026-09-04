@@ -1,8 +1,15 @@
--- AUTO Plugin fix for Delta / WindUI (1 loadstring, no external wrapper needed) - keep identity 8
-pcall(function()
+local function withPlugin(fn)
+    local get = getthreadidentity or get_thread_identity or function() return 8 end
     local set = setthreadidentity or set_thread_identity or setthreadcontext or set_identity
+    local old = get and get() or 8
     if set then pcall(set, 8) end
-end)
+    local ok, res = pcall(fn)
+    if set then pcall(set, old) end
+    if not ok then error(res) end
+    return res
+end
+
+withPlugin(function()
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local function getFlag(n) return RS:GetAttribute("LH_"..n) end
@@ -3507,3 +3514,4 @@ task.defer(function()
 	if getFlag("AutoPickOn") and Resume.autoPickLoop then task.spawn(Resume.autoPickLoop) end
 	task.spawn(replayLoop) -- always for Give Up, PlayAgain checks flag inside
 end)
+end) -- withPlugin end
