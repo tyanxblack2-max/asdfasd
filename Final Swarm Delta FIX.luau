@@ -217,19 +217,27 @@ local function adaptTab(wtab)
 	end
 	function t:CreateSection(o)
 		local nm = o and o.name or ""
-		if type(nm) ~= "string" or nm:match("^%s*$") then
-			local ok, r = pcall(function() return wtab:Divider() end)
-			if ok and r then return r end
-			return wtab:Section({ Title = " " })
-		end
-		return wtab:Section({ Title = nm })
+		local ok, res = pcall(function()
+			if type(nm) ~= "string" or nm:match("^%s*$") then
+				local ok2, r = pcall(function() return wtab:Divider() end)
+				if ok2 and r then return r end
+				return wtab:Section({ Title = " " })
+			end
+			return wtab:Section({ Title = nm })
+		end)
+		if not ok or not res then warn("[Fix] CreateSection failed: "..tostring(nm).." - "..tostring(res)) return {Set=function()end} end
+		return res
 	end
 	function t:CreateButton(o)
-		return wtab:Button({
-			Title = o.name,
-			Desc = o.desc,
-			Callback = o.callback,
-		})
+		local ok, res = pcall(function()
+			return wtab:Button({
+				Title = o.name,
+				Desc = o.desc,
+				Callback = o.callback,
+			})
+		end)
+		if not ok or not res then warn("[Fix] CreateButton failed: "..tostring(o.name).." - "..tostring(res)) return {} end
+		return res
 	end
 	function t:CreateStat(o)
 		local para = wtab:Paragraph({
@@ -258,11 +266,29 @@ local window = {}
 window._raw = WindowRaw
 window._tabIcons = { Main = "play", Raid = "zap", Lobby = "package", Misc = "wrench", Credits = "info", Configs = "save" }
 function window:CreateTab(o)
-	local wt = WindowRaw:Tab({
-		Title = o.name,
-		Icon = self._tabIcons[o.name] or "menu",
-	})
-	return adaptTab(wt)
+    local ok, wt = pcall(function()
+        return WindowRaw:Tab({
+            Title = o.name,
+            Icon = self._tabIcons[o.name] or "menu",
+        })
+    end)
+    if not ok or not wt then
+        warn("[Fix] CreateTab failed for "..tostring(o.name).." : "..tostring(wt).." - trying fallback menu icon")
+        ok, wt = pcall(function()
+            return WindowRaw:Tab({ Title = o.name, Icon = "menu" })
+        end)
+        if not ok or not wt then
+            warn("[Fix] CreateTab fallback also failed for "..tostring(o.name))
+            -- dummy tab that just warns
+            return { CreateToggle=function() return {Set=function()end} end, CreateSlider=function() return {Set=function()end} end, CreateDropdown=function() return {Select=function()end, Refresh=function()end, value={}} end, CreateSection=function() return {} end, CreateButton=function() return {} end, CreateStat=function() return {Set=function()end} end, CreateInput=function() return {} end, CreateParagraph=function() return {SetDesc=function()end} end }
+        end
+    end
+    local ok2, adapted = pcall(adaptTab, wt)
+    if not ok2 or not adapted then
+        warn("[Fix] adaptTab failed for "..tostring(o.name).." : "..tostring(adapted))
+        return wt
+    end
+    return adapted
 end
 function window:Notify(o)
 	return WindUI:Notify({
@@ -278,6 +304,13 @@ local lobby = window:CreateTab({ name = "Lobby" })
 local misc = window:CreateTab({ name = "Misc" })
 local credits = window:CreateTab({ name = "Credits" })
 local cfgTab = window:CreateTab({ name = "Configs" })
+-- diagnostic: add test paragraph to each tab to verify WindUI tab is alive
+pcall(function() tab:CreateSection({name="FIX v3 active"}) end)
+pcall(function() raid:CreateSection({name="FIX v3 active"}) end)
+pcall(function() lobby:CreateSection({name="FIX v3 active"}) end)
+pcall(function() misc:CreateSection({name="FIX v3 active"}) end)
+pcall(function() credits:CreateSection({name="FIX v3 active"}) end)
+pcall(function() cfgTab:CreateSection({name="FIX v3 active"}) end)
 
 -- Hub icon: drop the script-hub logo to the LEFT of the window title.
 -- Sirius builds the title bar as a horizontal UIListLayout row that holds the
