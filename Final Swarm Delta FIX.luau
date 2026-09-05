@@ -286,7 +286,7 @@ local cfgTab = window:CreateTab({ name = "Configs" })
 pcall(function()
 	local ICON = "rbxassetid://89254216319344"
 	task.wait(1.5)
-	local roots = { CoreGui }
+	local roots = { game.CoreGui }
 	local rg = game.CoreGui:FindFirstChild("RobloxGui")
 	if rg then roots[#roots + 1] = rg end
 	local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
@@ -324,7 +324,8 @@ end
 -- Disconnect the anti-cheat's HipHeight watcher (AntiCheatServiceClient line 199)
 -- so it cannot reset HipHeight or report "hipHeight" violations.
 local function disableAntiCheatWatcher()
-    local hum = getHumanoid()
+    pcall(function()
+        local hum = getHumanoid()
         if not hum then return end
         local sig = hum:GetPropertyChangedSignal("HipHeight")
         local cons = getconnections(sig)
