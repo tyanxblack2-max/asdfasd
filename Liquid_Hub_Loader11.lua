@@ -71,6 +71,13 @@ end
 
 withPlugin(function()
 
+
+    -- cooldown before HttpGet
+    pcall(function()
+        if not game:IsLoaded() then game.Loaded:Wait() end
+        task.wait(1.5)
+    end)
+
     local pid = game.PlaceId
 
     local gid = game.GameId

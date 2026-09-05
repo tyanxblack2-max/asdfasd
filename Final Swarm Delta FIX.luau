@@ -14,6 +14,14 @@ local function ensurePlugin()
     return cur == 8 or cur == 7
 end
 pcall(ensurePlugin)
+-- Cooldown for Delta: wait until game fully loaded and RS modules present
+pcall(function()
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    local RS = game:GetService("ReplicatedStorage")
+    local t0 = tick()
+    repeat task.wait(0.5) until (RS:FindFirstChild("Shared") and RS:FindFirstChild("Packages")) or tick()-t0 > 15
+    task.wait(2) -- extra cooldown to let WindUI and DataService replicate
+end)
 
 local function withPlugin(fn) pcall(ensurePlugin) local ok,res=pcall(fn) return res end
 local function safeTab(name, fn) local ok,err = pcall(fn) if not ok then warn("[SafeTab] "..name.." failed: "..tostring(err)) end end
