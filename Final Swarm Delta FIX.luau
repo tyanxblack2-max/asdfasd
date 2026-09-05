@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local function getFlag(n) return RS:GetAttribute("LH_"..n) end
 local function setFlag(n,v) RS:SetAttribute("LH_"..n, v) end
+local function safeTab(name, fn) local ok,err = pcall(fn) if not ok then warn("[SafeTab] "..name.." failed: "..tostring(err)) end end
 -- Every load stamps a unique generation into the DataModel. Loops check it, so a
 -- loop left running by an EARLIER execution of this script stops as soon as a new
 -- copy loads. Without this, re-executing instead of reloading left two raid loops
@@ -67,7 +68,16 @@ pcall(function()
 	end
 end)
 
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+local WindUI
+do
+    local src
+    local ok, res = pcall(function() return game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua") end)
+    if ok and res and #res>200 then src = res else
+        ok, res = pcall(function() return game:HttpGetAsync("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua") end)
+        if ok and res and #res>200 then src = res end
+    end
+    if src then WindUI = loadstring(src)() else error("WindUI download failed") end
+end
 
 local WindowRaw = WindUI:CreateWindow({
 	Title = "Liquid Hub",
@@ -2733,7 +2743,9 @@ local function getChestRemote()
 end
 
 local autoChestsOn = getFlag("AutoChestsOn")
-local DataServiceChest = require(game.ReplicatedStorage.Packages.DataService)
+local DataServiceChest
+pcall(function() DataServiceChest = require(game.ReplicatedStorage.Packages.DataService) end)
+if not DataServiceChest then warn("[Fix] DataServiceChest require failed") end
 
 local function openSingleChest(remote, name)
 	if name == "VoidChest" then
@@ -2792,17 +2804,22 @@ lobby:CreateSection({ name = " " })
 local allItems = {}
 local nameToItem = {}
 do
-	local WD = require(game.ReplicatedStorage.Shared.Modules.Data.WeaponData)
-	local AD = require(game.ReplicatedStorage.Shared.Modules.Data.ArmorData)
-	local GD = require(game.ReplicatedStorage.Shared.Modules.Data.GearData)
-	local function add(tbl, tp)
-		for name, data in pairs(tbl) do
-			local disp = (data and data.displayName) or name
-			allItems[#allItems+1] = { name = name, type = tp, display = disp, rarity = (data and data.rarity) or "?" }
-			nameToItem[name] = allItems[#allItems]
-		end
-	end
-	add(WD, "weapon"); add(AD, "armor"); add(GD, "gear")
+    local WD, AD, GD
+    pcall(function() WD = require(game.ReplicatedStorage.Shared.Modules.Data.WeaponData) end)
+    pcall(function() AD = require(game.ReplicatedStorage.Shared.Modules.Data.ArmorData) end)
+    pcall(function() GD = require(game.ReplicatedStorage.Shared.Modules.Data.GearData) end)
+    local function add(tbl, tp)
+        if type(tbl) ~= "table" then return end
+        for name, data in pairs(tbl) do
+            local disp = (data and data.displayName) or name
+            allItems[#allItems+1] = { name = name, type = tp, display = disp, rarity = (data and data.rarity) or "?" }
+            nameToItem[name] = allItems[#allItems]
+        end
+    end
+    if WD then add(WD, "weapon") end
+    if AD then add(AD, "armor") end
+    if GD then add(GD, "gear") end
+    if #allItems == 0 then warn("[Fix] allItems empty - WeaponData require failed, lobby dropdowns will be empty but script continues") end
 end
 
 local function getUpgradeRemote()
@@ -2819,7 +2836,9 @@ local function getUpgradeRemote()
 	return nil
 end
 local upgradeRemote = getUpgradeRemote()
-local DataServiceUpg = require(game.ReplicatedStorage.Packages.DataService)
+local DataServiceUpg
+pcall(function() DataServiceUpg = require(game.ReplicatedStorage.Packages.DataService) end)
+if not DataServiceUpg then pcall(function() DataServiceUpg = require(game:GetService("ReplicatedStorage").Packages.DataService) end) end
 
 local selectedUpgrade = {}
 local autoUpgradeOn = getFlag("AutoUpgradeOn")
@@ -2843,9 +2862,11 @@ local UpgradeDropdown = lobby:CreateDropdown({
 	end,
 })
 
-for _, nm in ipairs(UpgradeDropdown.value) do
+pcall(function()
+for _, nm in ipairs(UpgradeDropdown.value or {}) do
 	if nameToItem[nm] then selectedUpgrade[nm] = true end
 end
+end)
 
 lobby:CreateToggle({
 	name = "Auto Upgrade",
@@ -2865,10 +2886,10 @@ local TreeNet = nil
 local function autoTreeLoop()
 	autoTreeRunning = true
 	if not SkillTreeData then
-		SkillTreeData = require(game.ReplicatedStorage.Shared.Modules.Data.SkillTreeData)
+		pcall(function() SkillTreeData = require(game.ReplicatedStorage.Shared.Modules.Data.SkillTreeData) end)
 	end
 	if not TreeNet then
-		TreeNet = require(game.ReplicatedStorage.Packages.Networker).client.new("SkillTree", {})
+		pcall(function() TreeNet = require(game.ReplicatedStorage.Packages.Networker).client.new("SkillTree", {}) end)
 	end
 	while autoTreeOn do
 		local ok, err = pcall(function()
@@ -3086,6 +3107,7 @@ task.spawn(function()
 	end
 end)
 
+pcall(function() game:GetService("StarterGui"):SetCore("SendNotification", {Title="Liquid Hub", Text="FIX v2 loaded - Main:"..tostring(tab and "ok" or "fail").." Lobby:"..tostring(lobby and "ok" or "fail"), Duration=4}) end)
 local function onCharacterAdded()
 	task.wait(1)
 	disableAntiCheatWatcher()
