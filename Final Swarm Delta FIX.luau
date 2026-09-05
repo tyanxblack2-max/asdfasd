@@ -3,7 +3,19 @@ local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local function getFlag(n) return RS:GetAttribute("LH_"..n) end
 local function setFlag(n,v) RS:SetAttribute("LH_"..n, v) end
-local function withPlugin(fn) return fn() end
+local function ensurePlugin()
+    local get = getthreadidentity or get_thread_identity or function() return 0 end
+    local sets = {setthreadidentity, set_thread_identity, setthreadcontext, set_identity, (syn and syn.set_thread_identity)}
+    for _, s in ipairs(sets) do if type(s)=="function" then pcall(s, 8) end end
+    pcall(function() if setthreadidentity then setthreadidentity(8) end end)
+    pcall(function() if set_thread_identity then set_thread_identity(8) end end)
+    local cur = 0
+    pcall(function() cur = get() end)
+    return cur == 8 or cur == 7
+end
+pcall(ensurePlugin)
+
+local function withPlugin(fn) pcall(ensurePlugin) local ok,res=pcall(fn) return res end
 local function safeTab(name, fn) local ok,err = pcall(fn) if not ok then warn("[SafeTab] "..name.." failed: "..tostring(err)) end end
 -- Every load stamps a unique generation into the DataModel. Loops check it, so a
 -- loop left running by an EARLIER execution of this script stops as soon as a new
@@ -69,6 +81,7 @@ pcall(function()
 	end
 end)
 
+pcall(ensurePlugin)
 local WindUI
 do
     local src

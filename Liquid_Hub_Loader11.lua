@@ -19,23 +19,52 @@ local SUPPORTED = {
 
 
 local function withPlugin(fn)
-
-    local get = getthreadidentity or get_thread_identity or function() return 8 end
-
-    local set = setthreadidentity or set_thread_identity or setthreadcontext or set_identity
-
-    local old = get and get() or 8
-
-    if set then pcall(set, 8) end
-
+    local get = getthreadidentity or get_thread_identity or getthreadcontext or function() return 0 end
+    local sets = {setthreadidentity, set_thread_identity, setthreadcontext, set_identity, (syn and syn.set_thread_identity), (syn and syn.set_thread_context)}
+    local function trySet(v)
+        for _, s in ipairs(sets) do
+            if type(s)=="function" then pcall(s, v) end
+        end
+        -- also try 8 and 7
+        pcall(function() if setthreadidentity then setthreadidentity(v) end end)
+        pcall(function() if set_thread_identity then set_thread_identity(v) end end)
+    end
+    pcall(function() trySet(8) end)
+    -- verify
+    local cur = 0
+    pcall(function() cur = get() end)
+    if cur ~= 8 then
+        pcall(function() trySet(7) end)
+        pcall(function() cur = get() end)
+    end
+    -- DO NOT restore old identity - keep Plugin for WindUI heartbeat
     local ok, res = pcall(fn)
-
-    if set then pcall(set, old) end
-
-    if not ok then error(res) end
-
+    if not ok then
+        warn("[withPlugin] inner error: "..tostring(res))
+        if error then pcall(error, res) else warn(res) end
+    end
     return res
-
+end
+local function deltaHttpGet(url)
+    local ok, res
+    ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and type(res)=="string" and #res>200 then return res end
+    ok, res = pcall(function() return game:HttpGetAsync(url) end)
+    if ok and type(res)=="string" and #res>200 then return res end
+    if request then
+        ok, res = pcall(request, {Url=url, Method="GET"})
+        if ok and res and res.Body and #res.Body>200 then return res.Body end
+        if ok and res and type(res)=="string" and #res>200 then return res end
+    end
+    if http_request then
+        ok, res = pcall(http_request, {Url=url, Method="GET"})
+        if ok and res and res.Body and #res.Body>200 then return res.Body end
+    end
+    if syn and syn.request then
+        ok, res = pcall(syn.request, {Url=url, Method="GET"})
+        if ok and res and res.Body and #res.Body>200 then return res.Body end
+    end
+    return nil
 end
 
 
@@ -88,7 +117,21 @@ withPlugin(function()
 
     if url then
 
-        loadstring(game:HttpGet(url))()
+        local src = deltaHttpGet(url)
+        if not src then
+            warn("[Loader] HttpGet failed for "..tostring(url).." - check Http Requests enabled")
+            return
+        end
+        local fn2, err = loadstring(src)
+        if not fn2 then
+            warn("[Loader] loadstring failed: "..tostring(err))
+            return
+        end
+        local ok2, res2 = pcall(fn2)
+        if not ok2 then
+            warn("[Loader] script error: "..tostring(res2))
+            if error then error(res2) else warn(res2) end
+        end
 
     else
 
