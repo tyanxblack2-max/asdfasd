@@ -1,56 +1,3 @@
--- KEEP identity 8 for whole lifetime (WindUI creates Tweens later via Heartbeat)
-do
-    local set = setthreadidentity or set_thread_identity or setthreadcontext or set_identity
-    if set then pcall(set, 8) pcall(set, 7) end
-end
-local function withPlugin(fn)
-    local set = setthreadidentity or set_thread_identity or setthreadcontext or set_identity
-    if set then pcall(set, 8) end
-    return fn()
-end
-
-withPlugin(function()
--- === DELTA COMPAT POLYFILLS (inserted) ===
-if not table.find then
-    function table.find(t, v)
-        for i,val in ipairs(t) do if val == v then return i end end
-        return nil
-    end
-end
-if not table.create then
-    function table.create(n, v)
-        local t = {}
-        for i=1,n do t[i]=v end
-        return t
-    end
-end
-if bit32 == nil and bit and bit.bxor then
-    bit32 = { bxor = bit.bxor }
-end
-local _getconnections = getconnections or get_connections or function() return {} end
-getconnections = _getconnections
-if debug and not debug.getupvalues then
-    if debug.getupvalue then
-        function debug.getupvalues(f)
-            local ups = {}
-            local i=1
-            while true do
-                local n,v = debug.getupvalue(f, i)
-                if not n then break end
-                ups[n]=v
-                i=i+1
-            end
-            return ups
-        end
-    end
-end
-pcall(function()
-    local vim = game:GetService('VirtualInputManager')
-    if not vim.SendMouseButtonEvent then
-        warn('[DeltaFix] VIM.SendMouseButtonEvent missing')
-    end
-end)
--- === END POLYFILLS ===
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -85,7 +32,6 @@ local function isPaused() return false end
 -- instead of leaking locals to the end of the chunk.
 local Resume = {}
 
-
 -- Clean up any leftover UI from previous versions
 pcall(function() game.CoreGui:FindFirstChild("AutoUpgradeUI"):Destroy() end)
 pcall(function()
@@ -98,7 +44,7 @@ end)
 -- time). Without this every reload stacks another window on top of the old ones.
 pcall(function()
 	local rg = game.CoreGui:FindFirstChild("RobloxGui")
-	local parents = { game.CoreGui }
+	local parents = { CoreGui }
 	if rg then parents[#parents + 1] = rg end
 	pcall(function()
 		local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
@@ -121,35 +67,7 @@ pcall(function()
 	end
 end)
 
--- Robust WindUI loader for Delta (tries multiple Http methods)
-local function deltaHttpGet(url)
-    local ok, res
-    ok, res = pcall(function() return game:HttpGet(url) end)
-    if ok and type(res)=="string" and #res>200 then return res end
-    ok, res = pcall(function() return game:HttpGetAsync(url) end)
-    if ok and type(res)=="string" and #res>200 then return res end
-    if request then
-        ok, res = pcall(request, {Url=url, Method="GET"})
-        if ok and res and res.Body and #res.Body>200 then return res.Body end
-        if ok and res and type(res)=="string" and #res>200 then return res end
-    end
-    if http_request then
-        ok, res = pcall(http_request, {Url=url, Method="GET"})
-        if ok and res and res.Body and #res.Body>200 then return res.Body end
-    end
-    if syn and syn.request then
-        ok, res = pcall(syn.request, {Url=url, Method="GET"})
-        if ok and res and res.Body and #res.Body>200 then return res.Body end
-    end
-    return nil
-end
-local windSrc = deltaHttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
-if not windSrc then
-    windSrc = deltaHttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua")
-end
-if not windSrc then error("[DeltaFix] WindUI download failed - check Http requests enabled") end
-local WindUI = loadstring(windSrc)()
-
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 local WindowRaw = WindUI:CreateWindow({
 	Title = "Liquid Hub",
@@ -357,7 +275,7 @@ local cfgTab = window:CreateTab({ name = "Configs" })
 pcall(function()
 	local ICON = "rbxassetid://89254216319344"
 	task.wait(1.5)
-	local roots = { game.CoreGui }
+	local roots = { CoreGui }
 	local rg = game.CoreGui:FindFirstChild("RobloxGui")
 	if rg then roots[#roots + 1] = rg end
 	local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
@@ -395,11 +313,10 @@ end
 -- Disconnect the anti-cheat's HipHeight watcher (AntiCheatServiceClient line 199)
 -- so it cannot reset HipHeight or report "hipHeight" violations.
 local function disableAntiCheatWatcher()
-    pcall(function()
-        local hum = getHumanoid()
+    local hum = getHumanoid()
         if not hum then return end
         local sig = hum:GetPropertyChangedSignal("HipHeight")
-        local cons = _getconnections(sig)
+        local cons = getconnections(sig)
         for _, c in ipairs(cons) do
             local info = c.Function and debug.getinfo(c.Function) or {}
             if tostring(info.source):find("AntiCheatServiceClient") then
@@ -1751,7 +1668,6 @@ local function pickShrineSpot(bossPos)
 	return best
 end
 
-
 local RunService = game:GetService("RunService")
 local raidLoopRunning = false
 local function raidFarmLoop()
@@ -2058,7 +1974,6 @@ local function raidFarmLoop()
 	end
 	raidLoopRunning = false
 end
-
 
 tab:CreateToggle({
 	name = "Auto Farm",
@@ -3249,7 +3164,7 @@ local function applyHideName(on)
 		end)
 	end
 	pcall(function() hideInGui(p.PlayerGui) end)
-	pcall(function() hideInGui(game.CoreGui) end)
+	pcall(function() hideInGui(CoreGui) end)
 	pcall(function()
 		local pg = p.PlayerGui
 		local nf = pg:FindFirstChild("Frames") and pg.Frames:FindFirstChild("Upgrades") and pg.Frames.Upgrades:FindFirstChild("NameFrame")
@@ -3622,4 +3537,3 @@ task.defer(function()
 	task.spawn(replayLoop) -- always for Give Up, PlayAgain checks flag inside
 end)
 pcall(function() window:Notify({title="Liquid Hub", content="Loaded Delta FIX - tabs ready", duration=3}) end)
-end) -- withPlugin end
