@@ -48,6 +48,22 @@ end
 
 
 
+
+-- Hook Instance.new and TweenService to keep Plugin (Delta)
+pcall(function()
+    local _new = Instance.new
+    Instance.new = function(cn, parent)
+        pcall(ensurePlugin)
+        if parent then return _new(cn, parent) else return _new(cn) end
+    end
+    local TS = game:GetService("TweenService")
+    local _create = TS.Create
+    TS.Create = function(self, inst, info, props)
+        pcall(ensurePlugin)
+        return _create(self, inst, info, props)
+    end
+end)
+
 local function deltaHttpGet(url)
     local ok, res
     ok, res = pcall(function() return game:HttpGet(url) end)

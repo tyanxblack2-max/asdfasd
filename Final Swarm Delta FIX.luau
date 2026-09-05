@@ -101,6 +101,22 @@ pcall(function()
 end)
 
 pcall(ensurePlugin)
+
+-- Hook Instance.new and TweenService to keep Plugin (Delta)
+pcall(function()
+    local _new = Instance.new
+    Instance.new = function(cn, parent)
+        pcall(ensurePlugin)
+        if parent then return _new(cn, parent) else return _new(cn) end
+    end
+    local TS = game:GetService("TweenService")
+    local _create = TS.Create
+    TS.Create = function(self, inst, info, props)
+        pcall(ensurePlugin)
+        return _create(self, inst, info, props)
+    end
+end)
+
 local WindUI
 do
     local src
