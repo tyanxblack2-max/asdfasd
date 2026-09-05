@@ -45,6 +45,53 @@ local function withPlugin(fn)
     end
     return res
 end
+
+-- Ensure every new thread keeps Plugin capability (Delta heartbeat fix)
+pcall(function()
+    local _origSpawn = task.spawn
+    local _origDefer = task.defer
+    local _origDelay = task.delay
+    local _origWrap = coroutine.wrap
+    task.spawn = function(fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origSpawn(function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    task.defer = function(fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origDefer(function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    task.delay = function(t, fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origDelay(t, function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    if _origWrap then
+        coroutine.wrap = function(fn)
+            return function(...)
+                pcall(ensurePlugin)
+                return _origWrap(fn)(...)
+            end
+        end
+    end
+    -- also hook Heartbeat/RenderStepped if needed
+    pcall(function()
+        local hs = game:GetService("RunService")
+        local origConnect = hs.Heartbeat.Connect
+        -- not hooking connect, just ensurePlugin before each connect
+    end)
+end)
+
 local function deltaHttpGet(url)
     local ok, res
     ok, res = pcall(function() return game:HttpGet(url) end)

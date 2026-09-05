@@ -14,6 +14,53 @@ local function ensurePlugin()
     return cur == 8 or cur == 7
 end
 pcall(ensurePlugin)
+
+-- Ensure every new thread keeps Plugin capability (Delta heartbeat fix)
+pcall(function()
+    local _origSpawn = task.spawn
+    local _origDefer = task.defer
+    local _origDelay = task.delay
+    local _origWrap = coroutine.wrap
+    task.spawn = function(fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origSpawn(function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    task.defer = function(fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origDefer(function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    task.delay = function(t, fn, ...)
+        pcall(ensurePlugin)
+        local args = {...}
+        return _origDelay(t, function()
+            pcall(ensurePlugin)
+            return fn(table.unpack(args))
+        end)
+    end
+    if _origWrap then
+        coroutine.wrap = function(fn)
+            return function(...)
+                pcall(ensurePlugin)
+                return _origWrap(fn)(...)
+            end
+        end
+    end
+    -- also hook Heartbeat/RenderStepped if needed
+    pcall(function()
+        local hs = game:GetService("RunService")
+        local origConnect = hs.Heartbeat.Connect
+        -- not hooking connect, just ensurePlugin before each connect
+    end)
+end)
+
 -- Cooldown for Delta: wait until game fully loaded and RS modules present
 pcall(function()
     if not game:IsLoaded() then game.Loaded:Wait() end
@@ -378,6 +425,7 @@ end
 -- Disconnect the anti-cheat's HipHeight watcher (AntiCheatServiceClient line 199)
 -- so it cannot reset HipHeight or report "hipHeight" violations.
 local function disableAntiCheatWatcher()
+    pcall(ensurePlugin)
     pcall(function()
         local hum = getHumanoid()
         if not hum then return end
@@ -720,6 +768,7 @@ local function getSafeRockPos()
 end
 
 local function autoFarmLoop()
+    pcall(ensurePlugin)
 	if Resume.farmRunning then return end
 	Resume.farmRunning = true
 	while autoFarmOn do
@@ -814,6 +863,7 @@ end
 
 -- ===================== AUTO PORTAL =====================
 local function portalLoop()
+    pcall(ensurePlugin)
 	if Resume.portalRunning then return end
 	Resume.portalRunning = true
 	while autoPortalOn do
@@ -901,6 +951,7 @@ local function setRaidAnchorToCurrent()
 end
 
 local function tombEspLoop()
+    pcall(ensurePlugin)
 	tombEspRunning = true
 	while tombEspOn do
 		pcall(function()
@@ -1001,6 +1052,7 @@ local function getRaidBossHPFrac()
 end
 
 local function getRaidBossInfo()
+    pcall(ensurePlugin)
 	local enemies = workspace:FindFirstChild("Enemies")
 	local bossPos = nil
 	if enemies then
@@ -1365,6 +1417,7 @@ local dangers = {}
 local dangerScanAt = 0
 
 local function updateDangers()
+    pcall(ensurePlugin)
 	if tick() - dangerScanAt < 0.05 then return dangers end
 	dangerScanAt = tick()
 	local out = {}
