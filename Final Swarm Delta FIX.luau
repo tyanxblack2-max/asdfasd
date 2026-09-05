@@ -3,6 +3,7 @@ local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local function getFlag(n) return RS:GetAttribute("LH_"..n) end
 local function setFlag(n,v) RS:SetAttribute("LH_"..n, v) end
+local function withPlugin(fn) return fn() end
 local function safeTab(name, fn) local ok,err = pcall(fn) if not ok then warn("[SafeTab] "..name.." failed: "..tostring(err)) end end
 -- Every load stamps a unique generation into the DataModel. Loops check it, so a
 -- loop left running by an EARLIER execution of this script stops as soon as a new
@@ -45,7 +46,7 @@ end)
 -- time). Without this every reload stacks another window on top of the old ones.
 pcall(function()
 	local rg = game.CoreGui:FindFirstChild("RobloxGui")
-	local parents = { CoreGui }
+	local parents = { game.CoreGui }
 	if rg then parents[#parents + 1] = rg end
 	pcall(function()
 		local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
