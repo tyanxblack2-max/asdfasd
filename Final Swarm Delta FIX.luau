@@ -15,51 +15,15 @@ local function ensurePlugin()
 end
 pcall(ensurePlugin)
 
--- Ensure every new thread keeps Plugin capability (Delta heartbeat fix)
-pcall(function()
-    local _origSpawn = task.spawn
-    local _origDefer = task.defer
-    local _origDelay = task.delay
-    local _origWrap = coroutine.wrap
-    task.spawn = function(fn, ...)
+-- keep Plugin for WindUI tweens (heartbeat)
+task.spawn(function()
+    while true do
         pcall(ensurePlugin)
-        local args = {...}
-        return _origSpawn(function()
-            pcall(ensurePlugin)
-            return fn(table.unpack(args))
-        end)
+        task.wait(1)
     end
-    task.defer = function(fn, ...)
-        pcall(ensurePlugin)
-        local args = {...}
-        return _origDefer(function()
-            pcall(ensurePlugin)
-            return fn(table.unpack(args))
-        end)
-    end
-    task.delay = function(t, fn, ...)
-        pcall(ensurePlugin)
-        local args = {...}
-        return _origDelay(t, function()
-            pcall(ensurePlugin)
-            return fn(table.unpack(args))
-        end)
-    end
-    if _origWrap then
-        coroutine.wrap = function(fn)
-            return function(...)
-                pcall(ensurePlugin)
-                return _origWrap(fn)(...)
-            end
-        end
-    end
-    -- also hook Heartbeat/RenderStepped if needed
-    pcall(function()
-        local hs = game:GetService("RunService")
-        local origConnect = hs.Heartbeat.Connect
-        -- not hooking connect, just ensurePlugin before each connect
-    end)
 end)
+
+
 
 -- Cooldown for Delta: wait until game fully loaded and RS modules present
 pcall(function()
@@ -1242,6 +1206,7 @@ local function getBossCenterTarget(bossPos)
 end
 local lastLavaRockPos, lastLavaRockAt = nil, 0
 local function getNearestSafeRockAvoidDanger()
+    pcall(ensurePlugin)
 	local pr = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Map") and workspace.Map.Map:FindFirstChild("PlayerRocks")
 	if not pr then pr = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("PlayerRocks") end
 	if not pr then return getNearestSafeRock() end
@@ -1279,7 +1244,8 @@ local function getNearestSafeRockAvoidDanger()
 			local d = (pos - p).Magnitude
 			local threat = 0
 			for _,dg in ipairs(dangers) do
-				local dx,dz = p.X - dg.pos.X, p.Z - dg.pos.Z
+                if not dg.pos then continue end
+                local dx,dz = p.X - dg.pos.X, p.Z - dg.pos.Z
 				local hd = math.sqrt(dx*dx+dz*dz)
 				local need = dg.radius + (dg.isWall and 14 or 9)
 				if hd < need then threat = threat + (need - hd) end
@@ -1298,8 +1264,8 @@ local function getNearestSafeRockAvoidDanger()
 	pcall(function() lavaForce = isLavaPhase() end)
 	if lavaForce and lastLavaRockPos and now - lastLavaRockAt > 0.7 then
 		local needSwitch = false
-		if best and (best - lastLavaRockPos).Magnitude < 5 then needSwitch = true end
-		if not needSwitch and not best and fallback and (fallback - lastLavaRockPos).Magnitude < 5 then needSwitch = true end
+		if best and lastLavaRockPos and (best - lastLavaRockPos).Magnitude < 5 then needSwitch = true end
+		if not needSwitch and not best and fallback and lastLavaRockPos and (fallback - lastLavaRockPos).Magnitude < 5 then needSwitch = true end
 		-- также принудительно меняем если уже 1.8 сек стоим на одном камне — не даём боссу залить
 		if not needSwitch and now - lastLavaRockAt > 1.8 then needSwitch = true end
 		if needSwitch then
@@ -1313,7 +1279,7 @@ local function getNearestSafeRockAvoidDanger()
 					if (p2 - lastLavaRockPos).Magnitude < 3 then continue end
 					local d2 = (pos - p2).Magnitude
 					local threat2 = 0
-					for _,dg in ipairs(dangers) do local dx,dz = p2.X - dg.pos.X, p2.Z - dg.pos.Z local hd = math.sqrt(dx*dx+dz*dz) local need = dg.radius + (dg.isWall and 14 or 9) if hd < need then threat2 = threat2 + (need - hd) end end
+					for _,dg in ipairs(dangers) do if not dg.pos then continue end local dx,dz = p2.X - dg.pos.X, p2.Z - dg.pos.Z local hd = math.sqrt(dx*dx+dz*dz) local need = dg.radius + (dg.isWall and 14 or 9) if hd < need then threat2 = threat2 + (need - hd) end end
 					local score2 = threat2*80 + d2*1.5
 					if score2 < altScore then altScore = score2; alt = p2 end
 				end
@@ -1332,7 +1298,7 @@ local function getNearestSafeRockAvoidDanger()
 				if (p2 - best).Magnitude < 1 then continue end
 				local d2 = (pos - p2).Magnitude
 				local threat2 = 0
-				for _,dg in ipairs(dangers) do local dx,dz = p2.X - dg.pos.X, p2.Z - dg.pos.Z local hd = math.sqrt(dx*dx+dz*dz) local need = dg.radius + (dg.isWall and 14 or 9) if hd < need then threat2 = threat2 + (need - hd) end end
+				for _,dg in ipairs(dangers) do if not dg.pos then continue end local dx,dz = p2.X - dg.pos.X, p2.Z - dg.pos.Z local hd = math.sqrt(dx*dx+dz*dz) local need = dg.radius + (dg.isWall and 14 or 9) if hd < need then threat2 = threat2 + (need - hd) end end
 				local score2 = threat2*150 + d2*2
 				if score2 < secondScore then secondScore = score2; secondBest = p2 end
 			end
