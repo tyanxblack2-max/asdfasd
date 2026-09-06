@@ -88,8 +88,26 @@ pcall(function()
 	end
 end)
 
+
+-- keep Heartbeat at Plugin for WindUI SelectTab/ApplyTheme
+pcall(function()
+    local RS = game:GetService("RunService")
+    local function wrap(orig)
+        return function(self, fn)
+            return orig(self, function(...)
+                pcall(ensurePlugin)
+                return fn(...)
+            end)
+        end
+    end
+    pcall(function() RS.Heartbeat.Connect = wrap(RS.Heartbeat.Connect) end)
+    pcall(function() RS.RenderStepped.Connect = wrap(RS.RenderStepped.Connect) end)
+    pcall(function() RS.Stepped.Connect = wrap(RS.Stepped.Connect) end)
+end)
+
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
+pcall(ensurePlugin)
 local WindowRaw = WindUI:CreateWindow({
 	Title = "Liquid Hub",
 	Icon = "rbxassetid://89254216319344",
@@ -2781,9 +2799,21 @@ local allItems = {}
 local nameToItem = {}
 do
     local WD, AD, GD
-    pcall(function() WD = require(game.ReplicatedStorage.Shared.Modules.Data.WeaponData) end)
-    pcall(function() AD = require(game.ReplicatedStorage.Shared.Modules.Data.ArmorData) end)
-    pcall(function() GD = require(game.ReplicatedStorage.Shared.Modules.Data.GearData) end)
+    for _=1,5 do
+        pcall(function() WD = require(game.ReplicatedStorage.Shared.Modules.Data.WeaponData) end)
+        if WD then break end
+        task.wait(0.5)
+    end
+    for _=1,5 do
+        pcall(function() AD = require(game.ReplicatedStorage.Shared.Modules.Data.ArmorData) end)
+        if AD then break end
+        task.wait(0.5)
+    end
+    for _=1,5 do
+        pcall(function() GD = require(game.ReplicatedStorage.Shared.Modules.Data.GearData) end)
+        if GD then break end
+        task.wait(0.5)
+    end
 	local function add(tbl, tp)
 		for name, data in pairs(tbl) do
 			local disp = (data and data.displayName) or name
