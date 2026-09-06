@@ -4,11 +4,11 @@
 
 local SUPPORTED = {
 
-    [99521272836282] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX.luau", -- Final Swarm main
+    [99521272836282] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX%20Minimal.luau", -- Final Swarm main
 
-    [797875825749] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX.luau", -- Final Swarm Raid
+    [797875825749] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX%20Minimal.luau", -- Final Swarm Raid
 
-    [9551044479] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX.luau", -- Final Swarm Universe
+    [9551044479] = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Final%20Swarm%20Delta%20FIX%20Minimal.luau", -- Final Swarm Universe
 
         [72119929635167] = "https://raw.githubusercontent.com/BO3DYXAN777/Liquid_Hub/refs/heads/main/ChessInc_.luau", -- Chess Incremental Place
     [10381920426] = "https://raw.githubusercontent.com/BO3DYXAN777/Liquid_Hub/refs/heads/main/ChessInc_.luau", -- Chess Incremental Game
