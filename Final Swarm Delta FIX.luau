@@ -31,13 +31,6 @@ end)
 
 
 
--- Cooldown for Delta: wait until game fully loaded and RS modules present
-pcall(function()
-    if not game:IsLoaded() then game.Loaded:Wait() end
-    local RS = game:GetService("ReplicatedStorage")
-    local t0 = tick()
-    repeat task.wait(0.5) until (RS:FindFirstChild("Shared") and RS:FindFirstChild("Packages")) or tick()-t0 > 15
-    task.wait(2) -- extra cooldown to let WindUI and DataService replicate
 end)
 
 local function withPlugin(fn) pcall(ensurePlugin) local ok,res=pcall(fn) return res end
@@ -352,46 +345,20 @@ pcall(function() tab:CreateSection({name="FIX v3 active"}) end)
 pcall(function() raid:CreateSection({name="FIX v3 active"}) end)
 pcall(function() lobby:CreateSection({name="FIX v3 active"}) end)
 pcall(function() misc:CreateSection({name="FIX v3 active"}) end)
+pcall(ensurePlugin)
 pcall(function() credits:CreateSection({name="FIX v3 active"}) end)
+pcall(ensurePlugin)
 pcall(function() cfgTab:CreateSection({name="FIX v3 active"}) end)
-
--- Hub icon: drop the script-hub logo to the LEFT of the window title.
--- Sirius builds the title bar as a horizontal UIListLayout row that holds the
--- title+subtitle block; parenting an ImageLabel there with a lower LayoutOrder
--- places it leftmost, beside the title.
+-- Cooldown for Delta: wait until game fully loaded and RS modules present
 pcall(function()
-	local ICON = "rbxassetid://89254216319344"
-	task.wait(1.5)
-	local roots = { game.CoreGui }
-	local rg = game.CoreGui:FindFirstChild("RobloxGui")
-	if rg then roots[#roots + 1] = rg end
-	local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
-	if pg then roots[#roots + 1] = pg end
-	local label
-	for _, rt in ipairs(roots) do
-		for _, c in ipairs(rt:GetDescendants()) do
-			if c:IsA("TextLabel") and c.Text == "Liquid Hub" then
-				label = c
-				break
-			end
-		end
-		if label then break end
-	end
-	if not label then return end
-	local row = label.Parent.Parent -- horizontal row that contains the title block
-	if not row or not row:FindFirstChildOfClass("UIListLayout") then return end
-	local existing = row:FindFirstChild("HubIcon")
-	if existing then existing:Destroy() end
-	local icon = Instance.new("ImageLabel")
-	icon.Name = "HubIcon"
-	icon.Image = ICON
-	icon.BackgroundTransparency = 1
-	icon.Size = UDim2.new(0, 28, 0, 28)
-	icon.ScaleType = Enum.ScaleType.Fit
-	icon.LayoutOrder = 0 -- leftmost in the horizontal row
-	icon.Parent = row
-end)
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    local RS = game:GetService("ReplicatedStorage")
+    local t0 = tick()
+    repeat task.wait(0.5) until (RS:FindFirstChild("Shared") and RS:FindFirstChild("Packages")) or tick()-t0 > 15
+    task.wait(2) -- extra cooldown to let WindUI and DataService replicate
 
+
+-- Hub icon removed for Delta (was causing yield before Lobby)
 local function getHumanoid()
 	local char = Players.LocalPlayer.Character
 	return char and char:FindFirstChildOfClass("Humanoid")
@@ -2875,6 +2842,7 @@ local function openChestsLoop()
 	Resume.chestsRunning = false
 end
 
+pcall(ensurePlugin)
 lobby:CreateToggle({
 	name = "Auto Open Chests",
 	value = false,
@@ -2887,6 +2855,7 @@ lobby:CreateToggle({
 lobby:CreateSection({ name = " " })
 
 -- ===================== AUTO UPGRADE (WindUI via adapter) =====================
+pcall(ensurePlugin)
 local allItems = {}
 local nameToItem = {}
 do
@@ -3302,6 +3271,7 @@ end)
 
 misc:CreateSection({ name = " " })
 
+pcall(ensurePlugin)
 misc:CreateToggle({
 	name = "Anti AFK",
 	value = false,
