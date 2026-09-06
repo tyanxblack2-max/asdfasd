@@ -61,7 +61,7 @@ pcall(function()
     -- also Stepped
     pcall(function() RS.Stepped.Connect = wrapConnect(RS.Stepped.Connect) end)
 end)
- tweens (heartbeat)
+-- tweens (heartbeat)
 task.spawn(function()
     while true do
         pcall(ensurePlugin)
