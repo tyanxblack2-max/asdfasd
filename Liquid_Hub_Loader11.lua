@@ -64,6 +64,52 @@ pcall(function()
     end
 end)
 
+
+-- Delta: redirect CoreGui to gethui() and keep Heartbeat at Plugin
+pcall(function()
+    local _gs = game.GetService
+    local _hui = gethui or get_hidden_gui
+    -- hook GetService("CoreGui")
+    game.GetService = function(self, name)
+        if name == "CoreGui" and _hui then
+            local ok, h = pcall(_hui)
+            if ok and h then return h end
+        end
+        return _gs(self, name)
+    end
+    -- also hook game.CoreGui direct access via metatable if possible
+    pcall(function()
+        local mt = getrawmetatable(game)
+        if mt and mt.__index then
+            local origIndex = mt.__index
+            mt.__index = function(t,k)
+                if k == "CoreGui" and _hui then
+                    local ok,h = pcall(_hui)
+                    if ok and h then return h end
+                end
+                if type(origIndex)=="function" then return origIndex(t,k) else return origIndex[k] end
+            end
+        end
+    end)
+end)
+pcall(function()
+    local RS = game:GetService("RunService")
+    local _hbConnect = RS.Heartbeat.Connect
+    local _rsConnect = RS.RenderStepped.Connect
+    local function wrapConnect(orig)
+        return function(self, fn)
+            return orig(self, function(...)
+                pcall(ensurePlugin)
+                return fn(...)
+            end)
+        end
+    end
+    RS.Heartbeat.Connect = wrapConnect(_hbConnect)
+    pcall(function() RS.RenderStepped.Connect = wrapConnect(_rsConnect) end)
+    -- also Stepped
+    pcall(function() RS.Stepped.Connect = wrapConnect(RS.Stepped.Connect) end)
+end)
+
 local function deltaHttpGet(url)
     local ok, res
     ok, res = pcall(function() return game:HttpGet(url) end)
