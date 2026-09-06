@@ -15,6 +15,61 @@ local function ensurePlugin()
 end
 pcall(ensurePlugin)
 
+
+-- Hook all RBXScriptSignal Connect to keep Plugin (for WindUI SelectTab/ApplyTheme)
+pcall(function()
+    local hm = hookmetamethod or hook_metamethod
+    local gnm = getnamecallmethod or get_namecall_method
+    if hm and gnm then
+        local old
+        old = hm(game, "__namecall", function(self, ...)
+            local m = gnm()
+            if m == "Connect" and typeof(self) == "RBXScriptSignal" then
+                local args = {...}
+                local fn = args[1]
+                if type(fn) == "function" then
+                    args[1] = function(...)
+                        pcall(ensurePlugin)
+                        return fn(...)
+                    end
+                    return old(self, (table.unpack or unpack)(args))
+                end
+            elseif m == "ConnectParallel" and typeof(self) == "RBXScriptSignal" then
+                local args = {...}
+                local fn = args[1]
+                if type(fn) == "function" then
+                    args[1] = function(...)
+                        pcall(ensurePlugin)
+                        return fn(...)
+                    end
+                    return old(self, (table.unpack or unpack)(args))
+                end
+            end
+            return old(self, ...)
+        end)
+    end
+end)
+-- Also hook task.spawn/defer/delay correctly with unpack fallback
+pcall(function()
+    local _spawn, _defer, _delay = task.spawn, task.defer, task.delay
+    local _unpack = table.unpack or unpack
+    task.spawn = function(fn, ...)
+        pcall(ensurePlugin)
+        local a = {...}
+        return _spawn(function() pcall(ensurePlugin) return fn(_unpack(a)) end)
+    end
+    task.defer = function(fn, ...)
+        pcall(ensurePlugin)
+        local a = {...}
+        return _defer(function() pcall(ensurePlugin) return fn(_unpack(a)) end)
+    end
+    task.delay = function(t, fn, ...)
+        pcall(ensurePlugin)
+        local a = {...}
+        return _delay(t, function() pcall(ensurePlugin) return fn(_unpack(a)) end)
+    end
+end)
+
 -- keep Plugin for WindUI
 
 -- Delta: redirect CoreGui to gethui() and keep Heartbeat at Plugin
