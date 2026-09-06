@@ -16,107 +16,12 @@ end
 pcall(ensurePlugin)
 
 
--- Hook all RBXScriptSignal Connect to keep Plugin (for WindUI SelectTab/ApplyTheme)
-pcall(function()
-    local hm = hookmetamethod or hook_metamethod
-    local gnm = getnamecallmethod or get_namecall_method
-    if hm and gnm then
-        local old
-        old = hm(game, "__namecall", function(self, ...)
-            local m = gnm()
-            if m == "Connect" and typeof(self) == "RBXScriptSignal" then
-                local args = {...}
-                local fn = args[1]
-                if type(fn) == "function" then
-                    args[1] = function(...)
-                        pcall(ensurePlugin)
-                        return fn(...)
-                    end
-                    return old(self, (table.unpack or unpack)(args))
-                end
-            elseif m == "ConnectParallel" and typeof(self) == "RBXScriptSignal" then
-                local args = {...}
-                local fn = args[1]
-                if type(fn) == "function" then
-                    args[1] = function(...)
-                        pcall(ensurePlugin)
-                        return fn(...)
-                    end
-                    return old(self, (table.unpack or unpack)(args))
-                end
-            end
-            return old(self, ...)
-        end)
-    end
-end)
--- Also hook task.spawn/defer/delay correctly with unpack fallback
-pcall(function()
-    local _spawn, _defer, _delay = task.spawn, task.defer, task.delay
-    local _unpack = table.unpack or unpack
-    task.spawn = function(fn, ...)
-        pcall(ensurePlugin)
-        local a = {...}
-        return _spawn(function() pcall(ensurePlugin) return fn(_unpack(a)) end)
-    end
-    task.defer = function(fn, ...)
-        pcall(ensurePlugin)
-        local a = {...}
-        return _defer(function() pcall(ensurePlugin) return fn(_unpack(a)) end)
-    end
-    task.delay = function(t, fn, ...)
-        pcall(ensurePlugin)
-        local a = {...}
-        return _delay(t, function() pcall(ensurePlugin) return fn(_unpack(a)) end)
-    end
-end)
+
 
 -- keep Plugin for WindUI
 
--- Delta: redirect CoreGui to gethui() and keep Heartbeat at Plugin
-pcall(function()
-    local _gs = game.GetService
-    local _hui = gethui or get_hidden_gui
-    -- hook GetService("CoreGui")
-    game.GetService = function(self, name)
-        if name == "CoreGui" and _hui then
-            local ok, h = pcall(_hui)
-            if ok and h then return h end
-        end
-        return _gs(self, name)
-    end
-    -- also hook game.CoreGui direct access via metatable if possible
-    pcall(function()
-        local mt = getrawmetatable(game)
-        if mt and mt.__index then
-            local origIndex = mt.__index
-            mt.__index = function(t,k)
-                if k == "CoreGui" and _hui then
-                    local ok,h = pcall(_hui)
-                    if ok and h then return h end
-                end
-                if type(origIndex)=="function" then return origIndex(t,k) else return origIndex[k] end
-            end
-        end
-    end)
-end)
-pcall(function()
-    local RS = game:GetService("RunService")
-    local _hbConnect = RS.Heartbeat.Connect
-    local _rsConnect = RS.RenderStepped.Connect
-    local function wrapConnect(orig)
-        return function(self, fn)
-            return orig(self, function(...)
-                pcall(ensurePlugin)
-                return fn(...)
-            end)
-        end
-    end
-    RS.Heartbeat.Connect = wrapConnect(_hbConnect)
-    pcall(function() RS.RenderStepped.Connect = wrapConnect(_rsConnect) end)
-    -- also Stepped
-    pcall(function() RS.Stepped.Connect = wrapConnect(RS.Stepped.Connect) end)
-end)
--- tweens (heartbeat)
+
+-- keep Plugin heartbeat
 task.spawn(function()
     while true do
         pcall(ensurePlugin)
@@ -203,20 +108,7 @@ end)
 
 pcall(ensurePlugin)
 
--- Hook Instance.new and TweenService to keep Plugin (Delta)
-pcall(function()
-    local _new = Instance.new
-    Instance.new = function(cn, parent)
-        pcall(ensurePlugin)
-        if parent then return _new(cn, parent) else return _new(cn) end
-    end
-    local TS = game:GetService("TweenService")
-    local _create = TS.Create
-    TS.Create = function(self, inst, info, props)
-        pcall(ensurePlugin)
-        return _create(self, inst, info, props)
-    end
-end)
+
 
 local WindUI
 do
@@ -229,6 +121,7 @@ do
     if src then WindUI = loadstring(src)() else error("WindUI download failed") end
 end
 
+pcall(ensurePlugin)
 local WindowRaw = WindUI:CreateWindow({
 	Title = "Liquid Hub",
 	Icon = "rbxassetid://89254216319344",
@@ -415,6 +308,7 @@ local window = {}
 window._raw = WindowRaw
 window._tabIcons = { Main = "play", Raid = "zap", Lobby = "package", Misc = "wrench", Credits = "info", Configs = "save" }
 function window:CreateTab(o)
+    pcall(ensurePlugin)
     local ok, wt = pcall(function()
         return WindowRaw:Tab({
             Title = o.name,
