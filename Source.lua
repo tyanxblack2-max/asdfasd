@@ -6,7 +6,7 @@
     ██║ ╚████║███████╗██████╔╝╚██████╔╝███████╗██║  ██║
     ██║  ╚███║╚══════╝╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
 
-    LIQUID HUB UI LIBRARY v2.0 — "Deep Water"
+    LIQUID HUB UI LIBRARY v2.1 — "Deep Water"
     A modern, fully-featured UI library built for Roblox script executors.
 
     Executor compatibility: Delta, Real Executor, Hydrogen, Fluxus, Codex,
@@ -185,10 +185,20 @@ local function MakeDraggable(dragInput, dragTarget)
         and (input.UserInputType == Enum.UserInputType.MouseMovement
         or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
-            dragTarget.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            local abs = Camera.ViewportSize
+            -- Main is center-anchored: clamp its CENTER so the whole window
+            -- (incl. its stroke) stays on screen
+            local halfW = dragTarget.AbsoluteSize.X / 2
+            local halfH = dragTarget.AbsoluteSize.Y / 2
+            local x = math.clamp(
+                startPos.X.Scale * abs.X + startPos.X.Offset + delta.X,
+                halfW + 2, abs.X - halfW - 2
             )
+            local y = math.clamp(
+                startPos.Y.Scale * abs.Y + startPos.Y.Offset + delta.Y,
+                halfH + 2, abs.Y - halfH - 2
+            )
+            dragTarget.Position = UDim2.fromOffset(x, y)
         end
     end)
 end
@@ -225,7 +235,7 @@ function Nebula:CreateWindow(config)
     self.Keybinds = {}
     self.ConfigFolder = config.ConfigFolder or "LiquidHubConfig"
     self.TitleText = config.Title or "Liquid Hub"
-    self.SubTitle = config.SubTitle or "v2.0"
+    self.SubTitle = config.SubTitle or "v2.1"
 
     -- Auto-fit to small screens (phones)
     local viewport = (Camera and Camera.ViewportSize) or Vector2.new(1280, 720)
@@ -407,7 +417,7 @@ function Nebula:CreateWindow(config)
         Size = UDim2.new(1, 0, 0, 22),
         Font = Enum.Font.Gotham,
         RichText = true,
-        Text = "discord.gg/liquidhub  |  <b>Liquid Hub v2.0</b>",
+        Text = "discord.gg/liquidhub  |  <b>Liquid Hub v2.1</b>",
         TextColor3 = Theme("SubText"),
         TextSize = 12,
     })
@@ -734,14 +744,14 @@ function Nebula:CreateWindow(config)
 
                 local frame = Create("Frame", {
                     BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, 44),
+                    Size = UDim2.new(1, 0, 0, 56),
                     LayoutOrder = nextOrder(),
                 })
                 frame.Parent = holder
 
                 local lbl = Create("TextLabel", {
                     BackgroundTransparency = 1,
-                    Size = UDim2.new(1, -70, 0, 16),
+                    Size = UDim2.new(1, -90, 0, 16),
                     Font = Enum.Font.GothamMedium,
                     Text = text,
                     TextColor3 = Theme("Text"),
@@ -750,18 +760,21 @@ function Nebula:CreateWindow(config)
                 })
                 lbl.Parent = frame
 
-                local valueLbl = Create("TextLabel", {
+                -- Value is a TextBox: click it and type an exact number (confirm with
+                -- Enter or click-away; invalid input reverts to the previous value)
+                local valueBox = Create("TextBox", {
                     AnchorPoint = Vector2.new(1, 0),
                     BackgroundTransparency = 1,
                     Position = UDim2.new(1, 0, 0, 0),
-                    Size = UDim2.new(0, 70, 0, 16),
+                    Size = UDim2.new(0, 90, 0, 16),
                     Font = Enum.Font.GothamBold,
                     Text = tostring(value) .. (suffix or ""),
                     TextColor3 = Theme("Accent"),
                     TextSize = 13,
                     TextXAlignment = Enum.TextXAlignment.Right,
+                    ClearTextOnFocus = false,
                 })
-                valueLbl.Parent = frame
+                valueBox.Parent = frame
 
                 local bar = Create("TextButton", {
                     AnchorPoint = Vector2.new(0, 1),
@@ -799,7 +812,9 @@ function Nebula:CreateWindow(config)
                     local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
                     value = math.floor(min + (max - min) * rel + 0.5)
                     Nebula.Flags[flag] = value
-                    valueLbl.Text = tostring(value) .. (suffix or "")
+                    if not valueBox:IsFocused() then
+                        valueBox.Text = tostring(value) .. (suffix or "")
+                    end
                     fill.Size = UDim2.new(rel, 0, 1, 0)
                     knob.Position = UDim2.new(rel, 0, 0.5, 0)
                     if callback then callback(value) end
@@ -825,13 +840,36 @@ function Nebula:CreateWindow(config)
                     end
                 end)
 
+                -- Commit a typed value: parse the number, clamp to [min, max],
+                -- snap to the same integer stepping the drag uses, repaint, fire callback
+                local function commitTyped()
+                    local n = tonumber(valueBox.Text:match("-?%d+%.?%d*"))
+                    if not n then
+                        valueBox.Text = tostring(value) .. (suffix or "")
+                        return
+                    end
+                    value = math.clamp(math.floor(n + 0.5), min, max)
+                    Nebula.Flags[flag] = value
+                    local rel = (value - min) / (max - min)
+                    valueBox.Text = tostring(value) .. (suffix or "")
+                    Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
+                    Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
+                    if callback then callback(value) end
+                end
+
+                valueBox.Focused:Connect(function() SetTyping(true) end)
+                valueBox.FocusLost:Connect(function(enter)
+                    SetTyping(false)
+                    commitTyped()
+                end)
+
                 return {
                     Set = function(v)
                         v = math.clamp(v, min, max)
                         local rel = (v - min) / (max - min)
                         value = v
                         Nebula.Flags[flag] = v
-                        valueLbl.Text = tostring(v) .. (suffix or "")
+                        valueBox.Text = tostring(v) .. (suffix or "")
                         Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
                         Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
                     end,
