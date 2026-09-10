@@ -223,7 +223,7 @@ function Nebula:CreateWindow(config)
 
     -- Auto-fit to small screens (phones)
     local viewport = (Camera and Camera.ViewportSize) or Vector2.new(1280, 720)
-    self.Width = math.floor(math.min(config.Width or 680, viewport.X - 30))
+    self.Width = math.floor(math.min(config.Width or 720, viewport.X - 30))
     self.Height = math.floor(math.min(config.Height or 440, viewport.Y - 30))
 
     local ScreenGui = Create("ScreenGui", {
@@ -321,39 +321,39 @@ function Nebula:CreateWindow(config)
     end
 
     local minimized = false
-    MakeControl(-12, "—", function() -- minimize
+    MakeControl(-12, "X", function()
+        Nebula:Destroy(self)
+    end, Color3.fromRGB(255, 70, 70))
+
+    MakeControl(-48, "—", function() -- minimize
         minimized = not minimized
         local target = minimized and UDim2.fromOffset(self.Width, 40) or UDim2.fromOffset(self.Width, self.Height)
         Tween(Main, 0.25, { Size = target })
     end)
 
-    MakeControl(-48, "X", function()
-        Nebula:Destroy(self)
-    end, Color3.fromRGB(255, 70, 70))
-
     MakeDraggable(TitleBar, Main)
 
-    -- Sidebar
+    -- Sidebar (Chiyo-style: wide panel with icon + label rows)
     local Sidebar = Create("Frame", {
         Name = "Sidebar",
         BackgroundColor3 = Theme("Secondary"),
         Position = UDim2.fromOffset(0, 40),
-        Size = UDim2.new(0, 60, 1, -40),
+        Size = UDim2.new(0, 150, 1, -62),
     })
     Sidebar.Parent = Main
 
     local TabHolder = Create("ScrollingFrame", {
         BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(6, 8),
-        Size = UDim2.new(1, -12, 1, -16),
+        Position = UDim2.fromOffset(8, 8),
+        Size = UDim2.new(1, -16, 1, -16),
         CanvasSize = UDim2.new(),
         ScrollBarThickness = 0,
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
     }, {
         Create("UIListLayout", {
             FillDirection = Enum.FillDirection.Vertical,
-            HorizontalAlignment = Enum.HorizontalAlignment.Center,
-            Padding = UDim.new(0, 6),
+            HorizontalAlignment = Enum.HorizontalAlignment.Left,
+            Padding = UDim.new(0, 4),
             SortOrder = Enum.SortOrder.LayoutOrder,
         })
     })
@@ -363,10 +363,24 @@ function Nebula:CreateWindow(config)
     local Content = Create("Frame", {
         Name = "Content",
         BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(60, 40),
-        Size = UDim2.new(1, -60, 1, -40),
+        Position = UDim2.fromOffset(150, 40),
+        Size = UDim2.new(1, -150, 1, -62),
     })
     Content.Parent = Main
+
+    -- Footer: discord link, like the preview
+    local Footer = Create("TextLabel", {
+        Name = "Footer",
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 1, -22),
+        Size = UDim2.new(1, 0, 0, 22),
+        Font = Enum.Font.Gotham,
+        RichText = true,
+        Text = "discord.gg/liquidhub  |  <b>Liquid Hub v2.0</b>",
+        TextColor3 = Theme("SubText"),
+        TextSize = 12,
+    })
+    Footer.Parent = Main
 
     -- Tab container
     local TabContainer = Create("Folder", { Name = "TabContainer" })
@@ -389,15 +403,18 @@ function Nebula:CreateWindow(config)
 
         local btn = Create("TextButton", {
             BackgroundColor3 = Theme("Tertiary"),
-            Size = UDim2.fromOffset(46, 46),
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, -16, 0, 32),
             Font = Enum.Font.GothamBold,
-            Text = icon or name:sub(1, 1),
+            Text = (icon or name:sub(1, 1)) .. "  " .. name:upper(),
             TextColor3 = Theme("SubText"),
-            TextSize = 18,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
             AutoButtonColor = false,
             LayoutOrder = #self.Tabs + 1,
         }, {
-            Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+            Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+            Create("UIPadding", { PaddingLeft = UDim.new(0, 10) }),
         })
         btn.Parent = self.TabHolder
 
@@ -464,7 +481,7 @@ function Nebula:CreateWindow(config)
             right.Position = UDim2.new(0.5, 9, 0, 12)
             Tween(left, 0.25, { Position = UDim2.new(0, 0, 0, 0) })
             Tween(right, 0.25, { Position = UDim2.new(0.5, 9, 0, 0) })
-            Tween(btn, 0.18, { BackgroundColor3 = Theme("Element"), TextColor3 = Theme("Accent") })
+            Tween(btn, 0.18, { BackgroundColor3 = Theme("Element"), BackgroundTransparency = 0, TextColor3 = Theme("Accent") })
             stroke.Transparency = 0
             stroke.Color = Theme("Accent")
         end
@@ -472,12 +489,12 @@ function Nebula:CreateWindow(config)
         btn.MouseButton1Click:Connect(select)
         btn.MouseEnter:Connect(function()
             if self.CurrentTab ~= tab then
-                Tween(btn, 0.15, { TextColor3 = Theme("Text") })
+                Tween(btn, 0.15, { BackgroundTransparency = 0.5, TextColor3 = Theme("Text") })
             end
         end)
         btn.MouseLeave:Connect(function()
             if self.CurrentTab ~= tab then
-                Tween(btn, 0.15, { TextColor3 = Theme("SubText") })
+                Tween(btn, 0.15, { BackgroundTransparency = 1, TextColor3 = Theme("SubText") })
             end
         end)
 
@@ -618,16 +635,21 @@ function Nebula:CreateWindow(config)
                 })
                 btn.Parent = frame
 
-                local toggle = Create("Frame", {
+                -- The switch itself is a TextButton that sinks clicks (double-toggle fix:
+                -- previously both this frame and the label button fired for one click)
+                local toggle = Create("TextButton", {
                     AnchorPoint = Vector2.new(1, 0.5),
                     BackgroundColor3 = Theme("Tertiary"),
                     Position = UDim2.new(1, 0, 0.5, 0),
                     Size = UDim2.fromOffset(44, 22),
+                    Text = "",
+                    AutoButtonColor = false,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 toggle.Parent = frame
+                toggle.ZIndex = btn.ZIndex + 1
 
                 local knob = Create("Frame", {
                     AnchorPoint = Vector2.new(0, 0.5),
@@ -651,12 +673,15 @@ function Nebula:CreateWindow(config)
                 end
                 setState(state, true)
 
+                -- ONE handler: the switch is a TextButton sitting above the label,
+                -- so a click lands on exactly one of them — never both
+                toggle.MouseButton1Click:Connect(function() setState(not state) end)
                 btn.MouseButton1Click:Connect(function() setState(not state) end)
-                toggle.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                        setState(not state)
-                    end
+                toggle.MouseEnter:Connect(function()
+                    if not state then Tween(toggle, 0.12, { BackgroundColor3 = Theme("ElementHover") }) end
+                end)
+                toggle.MouseLeave:Connect(function()
+                    Tween(toggle, 0.12, { BackgroundColor3 = state and Theme("Accent") or Theme("Tertiary") })
                 end)
 
                 return {
