@@ -149,18 +149,9 @@ local function MakeDraggable(dragInput, dragTarget)
             end)
         end
     end)
-    dragInput.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch then
-            local delta = input.Position - dragStart
-            dragTarget.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
     UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        if dragging and dragStart
+        and (input.UserInputType == Enum.UserInputType.MouseMovement
         or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
             dragTarget.Position = UDim2.new(
