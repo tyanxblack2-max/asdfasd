@@ -196,6 +196,11 @@ function Nebula:CreateWindow(config)
     self.TitleText = config.Title or "Liquid Hub"
     self.SubTitle = config.SubTitle or "v2.0"
 
+    -- Auto-fit to small screens (phones)
+    local viewport = (Camera and Camera.ViewportSize) or Vector2.new(1280, 720)
+    self.Width = math.floor(math.min(config.Width or 680, viewport.X - 30))
+    self.Height = math.floor(math.min(config.Height or 440, viewport.Y - 30))
+
     local ScreenGui = Create("ScreenGui", {
         Name = "NebulaUI",
         ResetOnSpawn = false,
@@ -209,13 +214,52 @@ function Nebula:CreateWindow(config)
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = Theme("Background"),
         Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(620, 400),
+        Size = UDim2.fromOffset(self.Width, self.Height),
         Active = true,
     }, {
         Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
         Create("UIStroke", { Name = "Stroke", Color = Theme("ElementStroke"), Thickness = 1.5, Transparency = 0 }),
     })
     Main.Parent = ScreenGui
+
+    -- // BACKGROUND BUBBLES — Liquid branding //--
+    local BubbleHolder = Create("Frame", {
+        Name = "Bubbles",
+        BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1),
+        ZIndex = 0,
+        ClipsDescendants = true,
+    })
+    BubbleHolder.Parent = Main
+
+    task.spawn(function()
+        local rng = Random.new()
+        while BubbleHolder.Parent do
+            local size = rng:NextInteger(10, 34)
+            local bubble = Create("Frame", {
+                BackgroundColor3 = Theme("Accent"),
+                BackgroundTransparency = rng:NextNumber(0.82, 0.93),
+                Position = UDim2.new(rng:NextNumber(0, 1), 0, 1, 10),
+                Size = UDim2.fromOffset(size, size),
+                ZIndex = 0,
+                BorderSizePixel = 0,
+            }, {
+                Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+            })
+            bubble.Parent = BubbleHolder
+            local dur = rng:NextNumber(6, 12)
+            Tween(bubble, dur, {
+                Position = UDim2.new(
+                    math.clamp(bubble.Position.X.Scale + rng:NextNumber(-0.08, 0.08), 0, 1), 0, -0.12, 0
+                ),
+                BackgroundTransparency = 1,
+            }, Enum.EasingStyle.Linear)
+            task.delay(dur + 0.1, function()
+                if bubble.Parent then bubble:Destroy() end
+            end)
+            task.wait(rng:NextNumber(0.4, 1.1))
+        end
+    end)
 
     local TitleBar = Create("Frame", {
         Name = "TitleBar",
@@ -239,13 +283,22 @@ function Nebula:CreateWindow(config)
         Position = UDim2.fromOffset(16, 0),
         Size = UDim2.new(0, 300, 1, 0),
         Font = Enum.Font.GothamBold,
-        Text = self.TitleText .. "  <font color=\"#3beaff\">|</font>  " .. self.SubTitle,
+        Text = "💧  " .. self.TitleText .. "  <font color=\"#3beaff\">|</font>  " .. self.SubTitle,
         RichText = true,
         TextColor3 = Theme("Text"),
-        TextSize = 15,
+        TextSize = 16,
         TextXAlignment = Enum.TextXAlignment.Left,
     })
     Title.Parent = TitleBar
+
+    -- Accent gradient across the title (like the preview)
+    local titleGrad = Create("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+            ColorSequenceKeypoint.new(1, Theme("Accent")),
+        }),
+    })
+    titleGrad.Parent = Title
 
     -- Window controls
     local function MakeControl(offset, symbol, callback, hoverColor)
@@ -276,11 +329,11 @@ function Nebula:CreateWindow(config)
     local minimized = false
     MakeControl(-12, "—", function() -- minimize
         minimized = not minimized
-        local target = minimized and UDim2.fromOffset(620, 40) or UDim2.fromOffset(620, 400)
+        local target = minimized and UDim2.fromOffset(self.Width, 40) or UDim2.fromOffset(self.Width, self.Height)
         Tween(Main, 0.35, { Size = target })
     end)
 
-    MakeControl(-48, "✕", function()
+    MakeControl(-48, "X", function()
         Nebula:Destroy(self)
     end, Color3.fromRGB(255, 70, 70))
 
@@ -436,8 +489,8 @@ function Nebula:CreateWindow(config)
                 AutomaticSize = Enum.AutomaticSize.Y,
                 LayoutOrder = #side:GetChildren(),
             }, {
-                Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
-                Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1, Transparency = 0.5 }),
+                Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
+                Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1, Transparency = 0.35 }),
                 Create("UIPadding", {
                     PaddingTop = UDim.new(0, 10),
                     PaddingBottom = UDim.new(0, 10),
@@ -545,7 +598,7 @@ function Nebula:CreateWindow(config)
                     AnchorPoint = Vector2.new(1, 0.5),
                     BackgroundColor3 = Theme("Tertiary"),
                     Position = UDim2.new(1, 0, 0.5, 0),
-                    Size = UDim2.fromOffset(40, 20),
+                    Size = UDim2.fromOffset(44, 22),
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
@@ -555,8 +608,8 @@ function Nebula:CreateWindow(config)
                 local knob = Create("Frame", {
                     AnchorPoint = Vector2.new(0, 0.5),
                     BackgroundColor3 = Theme("Text"),
-                    Position = UDim2.new(0, 2, 0.5, 0),
-                    Size = UDim2.fromOffset(16, 16),
+                    Position = UDim2.new(0, 3, 0.5, 0),
+                    Size = UDim2.fromOffset(18, 18),
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                 })
@@ -566,10 +619,10 @@ function Nebula:CreateWindow(config)
                     state = v
                     Nebula.Flags[flag] = v
                     Tween(knob, 0.2, {
-                        Position = v and UDim2.new(1, -2, 0.5, 0) or UDim2.new(0, 2, 0.5, 0),
-                        BackgroundColor3 = v and Theme("Accent") or Theme("Text"),
+                        Position = v and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+                        BackgroundColor3 = v and Color3.fromRGB(255, 255, 255) or Theme("Text"),
                     })
-                    Tween(toggle, 0.2, { BackgroundColor3 = v and Theme("AccentDim") or Theme("Tertiary") })
+                    Tween(toggle, 0.2, { BackgroundColor3 = v and Theme("Accent") or Theme("Tertiary") })
                     if not noFire and callback then callback(v) end
                 end
                 setState(state, true)
@@ -740,6 +793,7 @@ function Nebula:CreateWindow(config)
                     AutoButtonColor = false,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
 
@@ -762,7 +816,7 @@ function Nebula:CreateWindow(config)
                     Position = UDim2.new(1, -12, 0.5, 0),
                     Size = UDim2.new(0, 14, 0, 14),
                     Font = Enum.Font.GothamBold,
-                    Text = "▾",
+                    Text = "v",
                     TextColor3 = Theme("SubText"),
                     TextSize = 13,
                 })
@@ -868,6 +922,7 @@ function Nebula:CreateWindow(config)
                     AutoButtonColor = false,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
 
@@ -893,7 +948,7 @@ function Nebula:CreateWindow(config)
                     Position = UDim2.new(1, -12, 0.5, 0),
                     Size = UDim2.new(0, 14, 0, 14),
                     Font = Enum.Font.GothamBold,
-                    Text = "▾",
+                    Text = "v",
                     TextColor3 = Theme("SubText"),
                     TextSize = 13,
                 })
@@ -1043,6 +1098,7 @@ function Nebula:CreateWindow(config)
                     AutoButtonColor = false,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
 
@@ -1082,7 +1138,7 @@ function Nebula:CreateWindow(config)
                     Position = UDim2.new(1, -12, 0.5, 0),
                     Size = UDim2.new(0, 14, 0, 14),
                     Font = Enum.Font.GothamBold,
-                    Text = "▾",
+                    Text = "v",
                     TextColor3 = Theme("SubText"),
                     TextSize = 13,
                 })
@@ -1109,7 +1165,7 @@ function Nebula:CreateWindow(config)
                 local function refreshOptionButtons()
                     for opt, ob in pairs(optButtons) do
                         if isSelected(opt) then
-                            ob.Text = "✓ " .. tostring(opt)
+                            ob.Text = "• " .. tostring(opt)
                             ob.TextColor3 = Theme("Accent")
                         else
                             ob.Text = tostring(opt)
@@ -1535,7 +1591,7 @@ function Nebula:CreateWindow(config)
     Nebula.Windows = Nebula.Windows or {}
     table.insert(Nebula.Windows, self)
 
-    self:Notify("Nebula", "Welcome, " .. LocalPlayer.Name .. "!", 3)
+    self:Notify("Liquid Hub", "Welcome, " .. LocalPlayer.Name .. "!", 3)
     return self
 end
 
