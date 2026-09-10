@@ -843,7 +843,7 @@ function Nebula:CreateWindow(config)
             function section:CreateDropdown(text, options, default, callback, flag)
                 flag = flag or text
                 options = options or {}
-                local selected = default or options[1]
+                local selected = default
                 Nebula.Flags[flag] = selected
 
                 local frame = Create("Frame", {
@@ -884,8 +884,8 @@ function Nebula:CreateWindow(config)
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, -34, 1, 0),
                     Font = Enum.Font.GothamMedium,
-                    Text = selected or "Select...",
-                    TextColor3 = Theme("Text"),
+                    Text = selected and tostring(selected) or "---",
+                    TextColor3 = selected and Theme("Text") or Theme("SubText"),
                     TextSize = 13,
                     TextXAlignment = Enum.TextXAlignment.Left,
                 })
@@ -958,10 +958,13 @@ function Nebula:CreateWindow(config)
                         CloseCurrentDropdown = setOpen
                         local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
                         local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                        local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
-                        list.Position = below
-                            and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
-                            or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                        local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
+                        -- clamp fully inside the window so the list stroke never crosses its edge
+                        local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
+                        local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
+                        local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
+                        y = math.clamp(y, 6, math.max(6, winH - h - 6))
+                        list.Position = UDim2.fromOffset(x, y)
                         list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
                         list.Visible = true
                         Tween(list, 0.15, { GroupTransparency = 0 })
@@ -1018,6 +1021,7 @@ function Nebula:CreateWindow(config)
                             selected = opt
                             Nebula.Flags[flag] = opt
                             selectedLbl.Text = tostring(opt)
+                            selectedLbl.TextColor3 = Theme("Text")
                             if callback then callback(opt) end
                             setOpen(false)
                         end)
@@ -1037,7 +1041,8 @@ function Nebula:CreateWindow(config)
                     Set = function(v)
                         selected = v
                         Nebula.Flags[flag] = v
-                        selectedLbl.Text = tostring(v)
+                        selectedLbl.Text = v and tostring(v) or "---"
+                        selectedLbl.TextColor3 = v and Theme("Text") or Theme("SubText")
                     end,
                     Refresh = function(newOpts)
                         options = newOpts or options
@@ -1055,7 +1060,7 @@ function Nebula:CreateWindow(config)
             function section:CreateSearchDropdown(text, options, default, callback, flag)
                 flag = flag or text
                 options = options or {}
-                local selected = default or options[1]
+                local selected = default
                 Nebula.Flags[flag] = selected
 
                 local frame = Create("Frame", {
@@ -1092,6 +1097,20 @@ function Nebula:CreateWindow(config)
                 Create("UIPadding", { PaddingLeft = UDim.new(0, 10) }).Parent = btn
                 local stroke = btn.UIStroke
 
+                -- Current selection display (or "---"): sits in the same top row as
+                -- the search field; the search box takes the row over while open
+                local selectedLbl = Create("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, -34, 1, 0),
+                    Font = Enum.Font.GothamMedium,
+                    Text = selected and tostring(selected) or "---",
+                    TextColor3 = selected and Theme("Text") or Theme("SubText"),
+                    TextSize = 13,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                })
+                selectedLbl.Parent = btn
+
                 local searchBox = Create("TextBox", {
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, -34, 1, 0),
@@ -1103,6 +1122,7 @@ function Nebula:CreateWindow(config)
                     TextSize = 13,
                     TextXAlignment = Enum.TextXAlignment.Left,
                     ClearTextOnFocus = false,
+                    Visible = false,
                 })
                 searchBox.Parent = btn
 
@@ -1167,10 +1187,13 @@ function Nebula:CreateWindow(config)
                 local function place()
                     local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
                     local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
-                    list.Position = below
-                        and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
-                        or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                    local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
+                    -- clamp fully inside the window so the list stroke never crosses its edge
+                    local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
+                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
+                    local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
+                    y = math.clamp(y, 6, math.max(6, winH - h - 6))
+                    list.Position = UDim2.fromOffset(x, y)
                     list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
                 end
 
@@ -1205,6 +1228,8 @@ function Nebula:CreateWindow(config)
                             ob.MouseButton1Click:Connect(function()
                                 selected = opt
                                 Nebula.Flags[flag] = opt
+                                selectedLbl.Text = tostring(opt)
+                                selectedLbl.TextColor3 = Theme("Text")
                                 if callback then callback(opt) end
                                 setOpen(false)
                             end)
@@ -1234,6 +1259,8 @@ function Nebula:CreateWindow(config)
                         end
                         CloseCurrentDropdown = setOpen
                         searchBox.Text = ""
+                        selectedLbl.Visible = false -- top row becomes the search field
+                        searchBox.Visible = true
                         rebuild("")
                         place()
                         list.Visible = true
@@ -1263,6 +1290,8 @@ function Nebula:CreateWindow(config)
                         if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
                         if outsideConn then outsideConn:Disconnect() outsideConn = nil end
                         searchBox.Text = ""
+                        searchBox.Visible = false
+                        selectedLbl.Visible = true -- back to the selection display
                         Tween(list, 0.12, { GroupTransparency = 1 })
                         Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
                         Tween(arrow, 0.12, { Rotation = 0 })
@@ -1304,6 +1333,8 @@ function Nebula:CreateWindow(config)
                     Set = function(v)
                         selected = v
                         Nebula.Flags[flag] = v
+                        selectedLbl.Text = v and tostring(v) or "---"
+                        selectedLbl.TextColor3 = v and Theme("Text") or Theme("SubText")
                     end,
                     Refresh = function(newOpts)
                         options = newOpts or options
@@ -1450,10 +1481,13 @@ function Nebula:CreateWindow(config)
                 local function place()
                     local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
                     local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
-                    list.Position = below
-                        and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
-                        or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                    local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
+                    -- clamp fully inside the window so the list stroke never crosses its edge
+                    local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
+                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
+                    local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
+                    y = math.clamp(y, 6, math.max(6, winH - h - 6))
+                    list.Position = UDim2.fromOffset(x, y)
                     list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
                 end
 
@@ -1710,10 +1744,43 @@ function Nebula:CreateWindow(config)
                 btn.Parent = frame
 
                 local listening = false
+                local preKey = nil
+
+                -- listening look: accent-filled button + hint on the label, so it's
+                -- obvious a rebind is being captured
+                local bindStroke = Create("UIStroke", {
+                    Color = Theme("Accent"),
+                    Thickness = 1.5,
+                    Transparency = 1,
+                })
+                bindStroke.Parent = btn
+
+                local function setListening(on)
+                    listening = on
+                    SetTyping(on) -- freeze character while capturing a key
+                    if on then
+                        preKey = key
+                        btn.Text = "..."
+                        btn.TextColor3 = Theme("Background")
+                        Tween(btn, 0.12, { BackgroundColor3 = Theme("Accent") })
+                        Tween(bindStroke, 0.12, { Transparency = 0 })
+                        lbl.Text = text .. "  (press a key, then Enter / click)"
+                    else
+                        btn.Text = key and key.Name or "None"
+                        btn.TextColor3 = Theme("Accent")
+                        Nebula.Flags[flag] = key
+                        Tween(btn, 0.12, { BackgroundColor3 = Theme("Element") })
+                        Tween(bindStroke, 0.12, { Transparency = 1 })
+                        lbl.Text = text
+                    end
+                end
+
+                local lastConfirm = 0
                 btn.MouseButton1Click:Connect(function()
-                    listening = not listening
-                    SetTyping(listening) -- freeze character while capturing a key
-                    btn.Text = listening and "..." or (key and key.Name or "None")
+                    -- the click that confirms capture also lands here (press fires
+                    -- InputBegan first, the click event fires on release) — don't re-enter
+                    if os.clock() - lastConfirm < 0.15 then return end
+                    setListening(not listening)
                 end)
 
                 local conn = UserInputService.InputBegan:Connect(function(input, gp)
@@ -1722,17 +1789,21 @@ function Nebula:CreateWindow(config)
                         -- etc.) are flagged gameProcessed, so honoring gp here would make
                         -- them impossible to bind
                         if input.UserInputType == Enum.UserInputType.Keyboard then
-                            key = input.KeyCode
-                            btn.Text = key.Name
-                            Nebula.Flags[flag] = key
-                            listening = false
-                            SetTyping(false)
+                            if input.KeyCode == Enum.KeyCode.Escape then
+                                key = preKey -- Escape = cancel, keep the old bind
+                                setListening(false)
+                            elseif input.KeyCode == Enum.KeyCode.Return
+                            or input.KeyCode == Enum.KeyCode.KeypadEnter then
+                                setListening(false) -- Enter = confirm
+                            else
+                                key = input.KeyCode
+                                btn.Text = key.Name -- shown immediately, confirmed on Enter/click
+                            end
                         elseif input.UserInputType == Enum.UserInputType.MouseButton1
                         or input.UserInputType == Enum.UserInputType.MouseButton2 then
-                            -- mouse click = cancel capture without changing the bind
-                            listening = false
-                            SetTyping(false)
-                            btn.Text = key and key.Name or "None"
+                            -- any click = confirm the pending key
+                            lastConfirm = os.clock()
+                            setListening(false)
                         end
                     elseif not gp then
                         -- Activation path: gameProcessed stays ignored here so clicking
@@ -1978,6 +2049,8 @@ function Nebula:CreateWindow(config)
                         local x = math.clamp(rel.X + swatch.AbsoluteSize.X - w, 6, math.max(6, Main.AbsoluteSize.X - w - 6))
                         local below = rel.Y + swatch.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
                         local y = below and (rel.Y + swatch.AbsoluteSize.Y + 6) or math.max(6, rel.Y - h - 6)
+                        -- keep fully inside the window: the stroke must never cross its edge
+                        y = math.clamp(y, 6, math.max(6, Main.AbsoluteSize.Y - h - 6))
                         picker.Position = UDim2.fromOffset(x, y)
                         picker.Size = UDim2.fromOffset(w, h)
                         picker.Visible = true
@@ -2145,31 +2218,43 @@ function Nebula:CreateWindow(config)
         local old = Nebula.Themes[Nebula.Theme]
         local new = Nebula.Themes[name]
         Nebula.Theme = name
-        -- Remap EVERY descendant whose color matches the old palette -> new palette
-        local oldMap = {}
-        for k, v in pairs(old) do oldMap[v] = k end
+        -- Remap EVERY descendant whose color matches the old palette -> new palette.
+        -- Colors must be compared by VALUE: Color3 is a userdata and userdata table
+        -- keys hash by identity, so the previous reverse-lookup map never matched
+        -- anything and elements only repainted when their hover handlers re-read Theme().
+        local function mapColor(c)
+            for k, v in pairs(old) do
+                if c == v then return new[k] end
+            end
+            return nil
+        end
         for _, obj in ipairs(Main:GetDescendants()) do
             if obj:IsA("GuiObject") then
-                local key = oldMap[obj.BackgroundColor3]
-                if key then obj.BackgroundColor3 = new[key] end
+                local mapped = mapColor(obj.BackgroundColor3)
+                if mapped then obj.BackgroundColor3 = mapped end
                 if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
-                    local tkey = oldMap[obj.TextColor3]
-                    if tkey then obj.TextColor3 = new[tkey] end
+                    mapped = mapColor(obj.TextColor3)
+                    if mapped then obj.TextColor3 = mapped end
                 end
                 if obj:IsA("TextBox") then
-                    local pkey = oldMap[obj.PlaceholderColor3]
-                    if pkey then obj.PlaceholderColor3 = new[pkey] end
+                    mapped = mapColor(obj.PlaceholderColor3)
+                    if mapped then obj.PlaceholderColor3 = mapped end
                 end
             elseif obj:IsA("UIStroke") then
-                local skey = oldMap[obj.Color]
-                if skey then obj.Color = new[skey] end
+                local mapped = mapColor(obj.Color)
+                if mapped then obj.Color = mapped end
             elseif obj:IsA("ScrollingFrame") then
-                local bkey = oldMap[obj.ScrollBarImageColor3]
-                if bkey then obj.ScrollBarImageColor3 = new[bkey] end
+                local mapped = mapColor(obj.ScrollBarImageColor3)
+                if mapped then obj.ScrollBarImageColor3 = mapped end
             end
         end
         Main.BackgroundColor3 = new.Background
         Title.TextColor3 = new.Text
+        -- the title text fades into the accent: repaint that gradient too
+        titleGrad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+            ColorSequenceKeypoint.new(1, new.Accent),
+        })
         self:Notify("Theme", "Switched to " .. name .. " theme", 2)
     end
 
