@@ -134,6 +134,31 @@ local function GetGuiParent()
     return LocalPlayer.PlayerGui
 end
 
+-- // CHARACTER CONTROLS: freeze movement while typing in UI fields //--
+local Controls
+do
+    local ok, pm = pcall(function()
+        return require(LocalPlayer:WaitForChild("PlayerScripts", 5):WaitForChild("PlayerModule", 5))
+    end)
+    if ok and pm then
+        local ok2, c = pcall(function() return pm:GetControls() end)
+        if ok2 and c then Controls = c end
+    end
+end
+
+local typingDepth = 0
+local function SetTyping(on)
+    typingDepth = math.max(0, typingDepth + (on and 1 or -1))
+    if Controls then
+        pcall(function()
+            if typingDepth > 0 then Controls:Disable() else Controls:Enable() end
+        end)
+    end
+end
+
+-- // DROPDOWN OVERLAY MANAGER — only one open at a time //--
+local CloseCurrentDropdown = nil
+
 local function MakeDraggable(dragInput, dragTarget)
     local dragging, dragStart, startPos = false, nil, nil
     dragInput.InputBegan:Connect(function(input)
@@ -404,20 +429,20 @@ function Nebula:CreateWindow(config)
 
         local left = Create("Frame", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(0.5, -6, 0, 0),
+            Size = UDim2.new(0.5, -9, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
         }, {
-            Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder })
+            Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder })
         })
         left.Parent = page
 
         local right = Create("Frame", {
             BackgroundTransparency = 1,
-            Position = UDim2.new(0.5, 6, 0, 0),
-            Size = UDim2.new(0.5, -6, 0, 0),
+            Position = UDim2.new(0.5, 9, 0, 0),
+            Size = UDim2.new(0.5, -9, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
         }, {
-            Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder })
+            Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder })
         })
         right.Parent = page
 
@@ -436,9 +461,9 @@ function Nebula:CreateWindow(config)
             page.Visible = true
             -- WindUI-style content slide on tab switch
             left.Position = UDim2.new(0, 0, 0, 12)
-            right.Position = UDim2.new(0.5, 6, 0, 12)
+            right.Position = UDim2.new(0.5, 9, 0, 12)
             Tween(left, 0.25, { Position = UDim2.new(0, 0, 0, 0) })
-            Tween(right, 0.25, { Position = UDim2.new(0.5, 6, 0, 0) })
+            Tween(right, 0.25, { Position = UDim2.new(0.5, 9, 0, 0) })
             Tween(btn, 0.18, { BackgroundColor3 = Theme("Element"), TextColor3 = Theme("Accent") })
             stroke.Transparency = 0
             stroke.Color = Theme("Accent")
@@ -491,17 +516,35 @@ function Nebula:CreateWindow(config)
             holder.Parent = frame
 
             if title then
-                local lbl = Create("TextLabel", {
+                -- Chiyo-style header: small accent bar beside the title
+                local headRow = Create("Frame", {
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, 0, 0, 20),
+                    LayoutOrder = 0,
+                })
+                headRow.Parent = holder
+
+                local accentBar = Create("Frame", {
+                    BackgroundColor3 = Theme("Accent"),
+                    Size = UDim2.new(0, 3, 1, -4),
+                    Position = UDim2.new(0, 0, 0, 2),
+                    BorderSizePixel = 0,
+                }, {
+                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                })
+                accentBar.Parent = headRow
+
+                local lbl = Create("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(10, 0),
+                    Size = UDim2.new(1, -10, 1, 0),
                     Font = Enum.Font.GothamBold,
                     Text = title,
                     TextColor3 = Theme("Text"),
                     TextSize = 14,
                     TextXAlignment = Enum.TextXAlignment.Left,
-                    LayoutOrder = 0,
                 })
-                lbl.Parent = holder
+                lbl.Parent = headRow
             end
 
             local order = title and 1 or 0
@@ -737,7 +780,7 @@ function Nebula:CreateWindow(config)
                 }
             end
 
-            -- // ELEMENT: DROPDOWN //--
+            -- // ELEMENT: DROPDOWN //-- (floating overlay: never pushes content down)
             function section:CreateDropdown(text, options, default, callback, flag)
                 flag = flag or text
                 options = options or {}
@@ -748,7 +791,6 @@ function Nebula:CreateWindow(config)
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, 0, 0, 56),
                     LayoutOrder = nextOrder(),
-                    ClipsDescendants = true,
                 })
                 frame.Parent = holder
 
@@ -763,7 +805,6 @@ function Nebula:CreateWindow(config)
                 })
                 lbl.Parent = frame
 
-                local open = false
                 local btn = Create("TextButton", {
                     BackgroundColor3 = Theme("Element"),
                     Position = UDim2.fromOffset(0, 20),
@@ -777,8 +818,8 @@ function Nebula:CreateWindow(config)
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
-
                 Create("UIPadding", { PaddingLeft = UDim.new(0, 10) }).Parent = btn
+                local stroke = btn.UIStroke
 
                 local selectedLbl = Create("TextLabel", {
                     BackgroundTransparency = 1,
@@ -803,53 +844,134 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                local list = Create("Frame", {
-                    BackgroundColor3 = Theme("Tertiary"),
-                    Position = UDim2.fromOffset(0, 52),
-                    Size = UDim2.new(1, 0, 0, 0),
+                -- Floating list: lives on the window itself, above all content
+                local list = Create("CanvasGroup", {
+                    BackgroundColor3 = Theme("Secondary"),
+                    Visible = false,
+                    ZIndex = 60,
+                    GroupTransparency = 1,
+                    BorderSizePixel = 0,
                 }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = frame
+                list.Parent = Main
+
+                local scroll = Create("ScrollingFrame", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 1, 0),
+                    CanvasSize = UDim2.new(),
+                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    ScrollBarThickness = 3,
+                    ScrollBarImageColor3 = Theme("Accent"),
+                    BorderSizePixel = 0,
+                    ZIndex = 61,
+                }, {
+                    Create("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UIPadding", {
+                        PaddingTop = UDim.new(0, 4),
+                        PaddingBottom = UDim.new(0, 4),
+                        PaddingLeft = UDim.new(0, 4),
+                        PaddingRight = UDim.new(0, 4),
+                    }),
+                })
+                scroll.Parent = list
+
+                local ROW, GAP, MAXH = 26, 3, 150
+                local open = false
+                local outsideConn = nil
+
+                local function countRows()
+                    local n = 0
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then n = n + 1 end
+                    end
+                    return n
+                end
+
+                local function setOpen(v)
+                    if open == v then return end
+                    open = v
+                    if v then
+                        if CloseCurrentDropdown and CloseCurrentDropdown ~= setOpen then
+                            CloseCurrentDropdown()
+                        end
+                        CloseCurrentDropdown = setOpen
+                        local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
+                        local rel = btn.AbsolutePosition - Main.AbsolutePosition
+                        local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
+                        list.Position = below
+                            and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
+                            or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                        list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                        list.Visible = true
+                        Tween(list, 0.15, { GroupTransparency = 0 })
+                        Tween(stroke, 0.15, { Color = Theme("Accent") })
+                        Tween(arrow, 0.15, { Rotation = 180 })
+                        outsideConn = UserInputService.InputBegan:Connect(function(input)
+                            if input.UserInputType == Enum.UserInputType.MouseButton1
+                            or input.UserInputType == Enum.UserInputType.Touch then
+                                local p, lp, ls = input.Position, list.AbsolutePosition, list.AbsoluteSize
+                                local bp, bs = btn.AbsolutePosition, btn.AbsoluteSize
+                                local inList = p.X >= lp.X and p.X <= lp.X + ls.X and p.Y >= lp.Y and p.Y <= lp.Y + ls.Y
+                                local inBtn = p.X >= bp.X and p.X <= bp.X + bs.X and p.Y >= bp.Y and p.Y <= bp.Y + bs.Y
+                                if not inList and not inBtn then setOpen(false) end
+                            end
+                        end)
+                        table.insert(Nebula.Connections, outsideConn)
+                    else
+                        if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
+                        if outsideConn then outsideConn:Disconnect() outsideConn = nil end
+                        Tween(list, 0.12, { GroupTransparency = 1 })
+                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
+                        Tween(arrow, 0.12, { Rotation = 0 })
+                        task.delay(0.13, function()
+                            if not open and list and list.Parent then list.Visible = false end
+                        end)
+                    end
+                end
 
                 local function rebuild()
-                    for _, c in ipairs(list:GetChildren()) do
-                        if c:IsA("TextButton") then c:Destroy() end
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
                     end
                     for i, opt in ipairs(options) do
+                        local isSel = (opt == selected)
                         local ob = Create("TextButton", {
                             BackgroundColor3 = Theme("Element"),
-                            Size = UDim2.new(1, -8, 0, 26),
-                            Position = UDim2.new(0, 4, 0, (i - 1) * 28 + 4),
+                            Size = UDim2.new(1, 0, 0, ROW),
                             Font = Enum.Font.Gotham,
-                            Text = tostring(opt),
-                            TextColor3 = (opt == selected) and Theme("Accent") or Theme("Text"),
+                            Text = isSel and ("\u{2022}  " .. tostring(opt)) or tostring(opt),
+                            TextColor3 = isSel and Theme("Accent") or Theme("Text"),
                             TextSize = 12,
                             AutoButtonColor = false,
+                            ZIndex = 62,
                             LayoutOrder = i,
                         }, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
-                        ob.Parent = list
+                        ob.Parent = scroll
+                        ob.MouseEnter:Connect(function()
+                            Tween(ob, 0.1, { BackgroundColor3 = Theme("ElementHover") })
+                        end)
+                        ob.MouseLeave:Connect(function()
+                            Tween(ob, 0.1, { BackgroundColor3 = Theme("Element") })
+                        end)
                         ob.MouseButton1Click:Connect(function()
                             selected = opt
                             Nebula.Flags[flag] = opt
                             selectedLbl.Text = tostring(opt)
                             if callback then callback(opt) end
-                            open = false
-                            Tween(list, 0.18, { Size = UDim2.new(1, 0, 0, 0) })
-                            Tween(frame, 0.18, { Size = UDim2.new(1, 0, 0, 56) })
-                            Tween(arrow, 0.18, { Rotation = 0 })
+                            setOpen(false)
                         end)
                     end
                 end
                 rebuild()
 
-                btn.MouseButton1Click:Connect(function()
-                    open = not open
-                    local h = #options * 28 + 8
-                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
-                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
+                btn.MouseButton1Click:Connect(function() setOpen(not open) end)
+                btn.MouseEnter:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("Accent") }) end
+                end)
+                btn.MouseLeave:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("ElementStroke") }) end
                 end)
 
                 return {
@@ -861,12 +983,16 @@ function Nebula:CreateWindow(config)
                     Refresh = function(newOpts)
                         options = newOpts or options
                         rebuild()
+                        if open then
+                            list.Size = UDim2.fromOffset(btn.AbsoluteSize.X,
+                                math.min(countRows() * (ROW + GAP) + 8, MAXH))
+                        end
                     end,
                     Get = function() return selected end,
                 }
             end
 
-            -- // ELEMENT: SEARCHABLE DROPDOWN //--
+            -- // ELEMENT: SEARCHABLE DROPDOWN //-- (floating overlay)
             function section:CreateSearchDropdown(text, options, default, callback, flag)
                 flag = flag or text
                 options = options or {}
@@ -877,7 +1003,6 @@ function Nebula:CreateWindow(config)
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, 0, 0, 56),
                     LayoutOrder = nextOrder(),
-                    ClipsDescendants = true,
                 })
                 frame.Parent = holder
 
@@ -892,7 +1017,6 @@ function Nebula:CreateWindow(config)
                 })
                 lbl.Parent = frame
 
-                local open = false
                 local btn = Create("TextButton", {
                     BackgroundColor3 = Theme("Element"),
                     Position = UDim2.fromOffset(0, 20),
@@ -906,8 +1030,8 @@ function Nebula:CreateWindow(config)
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
-
                 Create("UIPadding", { PaddingLeft = UDim.new(0, 10) }).Parent = btn
+                local stroke = btn.UIStroke
 
                 local searchBox = Create("TextBox", {
                     BackgroundTransparency = 1,
@@ -935,91 +1059,174 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                local list = Create("Frame", {
-                    BackgroundColor3 = Theme("Tertiary"),
-                    Position = UDim2.fromOffset(0, 52),
-                    Size = UDim2.new(1, 0, 0, 0),
+                -- Floating list lives on the window, above all content
+                local list = Create("CanvasGroup", {
+                    BackgroundColor3 = Theme("Secondary"),
+                    Visible = false,
+                    ZIndex = 60,
+                    GroupTransparency = 1,
+                    BorderSizePixel = 0,
                 }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = frame
+                list.Parent = Main
+
+                local scroll = Create("ScrollingFrame", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 1, 0),
+                    CanvasSize = UDim2.new(),
+                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    ScrollBarThickness = 3,
+                    ScrollBarImageColor3 = Theme("Accent"),
+                    BorderSizePixel = 0,
+                    ZIndex = 61,
+                }, {
+                    Create("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UIPadding", {
+                        PaddingTop = UDim.new(0, 4),
+                        PaddingBottom = UDim.new(0, 4),
+                        PaddingLeft = UDim.new(0, 4),
+                        PaddingRight = UDim.new(0, 4),
+                    }),
+                })
+                scroll.Parent = list
+
+                local ROW, GAP, MAXH = 26, 3, 150
+                local open = false
+                local outsideConn = nil
+                local setOpen -- forward declaration: rebuild() below closes over this
+
+                local function countRows()
+                    local n = 0
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then n = n + 1 end
+                    end
+                    return n
+                end
+
+                local function place()
+                    local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
+                    local rel = btn.AbsolutePosition - Main.AbsolutePosition
+                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
+                    list.Position = below
+                        and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
+                        or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                    list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                end
 
                 local function rebuild(filter)
                     filter = (filter or ""):lower()
-                    for _, c in ipairs(list:GetChildren()) do
-                        if c:IsA("TextButton") then c:Destroy() end
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
                     end
                     local shown = 0
                     for i, opt in ipairs(options) do
                         if filter == "" or tostring(opt):lower():find(filter, 1, true) then
                             shown = shown + 1
+                            local isSel = (opt == selected)
                             local ob = Create("TextButton", {
                                 BackgroundColor3 = Theme("Element"),
-                                Size = UDim2.new(1, -8, 0, 26),
+                                Size = UDim2.new(1, 0, 0, ROW),
                                 Font = Enum.Font.Gotham,
-                                Text = tostring(opt),
-                                TextColor3 = (opt == selected) and Theme("Accent") or Theme("Text"),
+                                Text = isSel and ("\u{2022}  " .. tostring(opt)) or tostring(opt),
+                                TextColor3 = isSel and Theme("Accent") or Theme("Text"),
                                 TextSize = 12,
                                 AutoButtonColor = false,
+                                ZIndex = 62,
                                 LayoutOrder = i,
                             }, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
-                            ob.Parent = list
+                            ob.Parent = scroll
+                            ob.MouseEnter:Connect(function()
+                                Tween(ob, 0.1, { BackgroundColor3 = Theme("ElementHover") })
+                            end)
+                            ob.MouseLeave:Connect(function()
+                                Tween(ob, 0.1, { BackgroundColor3 = Theme("Element") })
+                            end)
                             ob.MouseButton1Click:Connect(function()
                                 selected = opt
                                 Nebula.Flags[flag] = opt
-                                searchBox.Text = ""
                                 if callback then callback(opt) end
-                                open = false
-                                Tween(list, 0.18, { Size = UDim2.new(1, 0, 0, 0) })
-                                Tween(frame, 0.18, { Size = UDim2.new(1, 0, 0, 56) })
-                                Tween(arrow, 0.18, { Rotation = 0 })
+                                setOpen(false)
                             end)
                         end
                     end
                     if shown == 0 then
                         local empty = Create("TextLabel", {
                             BackgroundTransparency = 1,
-                            Size = UDim2.new(1, -8, 0, 26),
+                            Size = UDim2.new(1, 0, 0, ROW),
                             Font = Enum.Font.Gotham,
                             Text = "Nothing found",
                             TextColor3 = Theme("SubText"),
                             TextSize = 12,
+                            ZIndex = 62,
                             LayoutOrder = 9999,
                         })
-                        empty.Parent = list
-                        shown = 1
+                        empty.Parent = scroll
                     end
-                    return shown
                 end
 
-                local function currentHeight()
-                    local n = 0
-                    for _, c in ipairs(list:GetChildren()) do
-                        if c:IsA("TextButton") or c:IsA("TextLabel") then n = n + 1 end
+                setOpen = function(v)
+                    if open == v then return end
+                    open = v
+                    if v then
+                        if CloseCurrentDropdown and CloseCurrentDropdown ~= setOpen then
+                            CloseCurrentDropdown()
+                        end
+                        CloseCurrentDropdown = setOpen
+                        searchBox.Text = ""
+                        rebuild("")
+                        place()
+                        list.Visible = true
+                        Tween(list, 0.15, { GroupTransparency = 0 })
+                        Tween(stroke, 0.15, { Color = Theme("Accent") })
+                        Tween(arrow, 0.15, { Rotation = 180 })
+                        outsideConn = UserInputService.InputBegan:Connect(function(input)
+                            if input.UserInputType == Enum.UserInputType.MouseButton1
+                            or input.UserInputType == Enum.UserInputType.Touch then
+                                local p, lp, ls = input.Position, list.AbsolutePosition, list.AbsoluteSize
+                                local bp, bs = btn.AbsolutePosition, btn.AbsoluteSize
+                                local inList = p.X >= lp.X and p.X <= lp.X + ls.X and p.Y >= lp.Y and p.Y <= lp.Y + ls.Y
+                                local inBtn = p.X >= bp.X and p.X <= bp.X + bs.X and p.Y >= bp.Y and p.Y <= bp.Y + bs.Y
+                                if not inList and not inBtn then setOpen(false) end
+                            end
+                        end)
+                        table.insert(Nebula.Connections, outsideConn)
+                        task.defer(function()
+                            if open then searchBox:CaptureFocus() end
+                        end)
+                    else
+                        if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
+                        if outsideConn then outsideConn:Disconnect() outsideConn = nil end
+                        searchBox.Text = ""
+                        Tween(list, 0.12, { GroupTransparency = 1 })
+                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
+                        Tween(arrow, 0.12, { Rotation = 0 })
+                        task.delay(0.13, function()
+                            if not open and list and list.Parent then list.Visible = false end
+                        end)
                     end
-                    return n * 28 + 8
                 end
 
-                rebuild("")
-
-                btn.MouseButton1Click:Connect(function()
-                    open = not open
-                    searchBox.Text = ""
-                    rebuild("")
-                    local h = currentHeight()
-                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h) or UDim2.new(1, 0, 0, 56) })
-                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
-                    if open then searchBox:CaptureFocus() end
+                btn.MouseButton1Click:Connect(function() setOpen(not open) end)
+                btn.MouseEnter:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("Accent") }) end
+                end)
+                btn.MouseLeave:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("ElementStroke") }) end
                 end)
 
                 searchBox:GetPropertyChangedSignal("Text"):Connect(function()
                     if not open then return end
                     rebuild(searchBox.Text)
-                    local h = currentHeight()
-                    list.Size = UDim2.new(1, 0, 0, h)
-                    frame.Size = UDim2.new(1, 0, 0, 56 + h)
+                    place()
+                end)
+
+                -- Freeze character while the search box is focused
+                searchBox.Focused:Connect(function() SetTyping(true) end)
+                searchBox.FocusLost:Connect(function()
+                    SetTyping(false)
+                    if open then setOpen(false) end
                 end)
 
                 return {
@@ -1030,12 +1237,13 @@ function Nebula:CreateWindow(config)
                     Refresh = function(newOpts)
                         options = newOpts or options
                         rebuild("")
+                        if open then place() end
                     end,
                     Get = function() return selected end,
                 }
             end
 
-            -- // ELEMENT: MULTI DROPDOWN //--
+            -- // ELEMENT: MULTI DROPDOWN //-- (floating overlay)
             function section:CreateMultiDropdown(text, options, defaults, callback, flag)
                 flag = flag or text
                 options = options or {}
@@ -1053,7 +1261,6 @@ function Nebula:CreateWindow(config)
                     BackgroundTransparency = 1,
                     Size = UDim2.new(1, 0, 0, 56),
                     LayoutOrder = nextOrder(),
-                    ClipsDescendants = true,
                 })
                 frame.Parent = holder
 
@@ -1068,7 +1275,6 @@ function Nebula:CreateWindow(config)
                 })
                 lbl.Parent = frame
 
-                local open = false
                 local btn = Create("TextButton", {
                     BackgroundColor3 = Theme("Element"),
                     Position = UDim2.fromOffset(0, 20),
@@ -1082,8 +1288,8 @@ function Nebula:CreateWindow(config)
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
                 btn.Parent = frame
-
                 Create("UIPadding", { PaddingLeft = UDim.new(0, 10) }).Parent = btn
+                local stroke = btn.UIStroke
 
                 local summaryLbl = Create("TextLabel", {
                     BackgroundTransparency = 1,
@@ -1125,15 +1331,60 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                local list = Create("Frame", {
-                    BackgroundColor3 = Theme("Tertiary"),
-                    Position = UDim2.fromOffset(0, 52),
-                    Size = UDim2.new(1, 0, 0, 0),
+                -- Floating list lives on the window, above all content
+                local list = Create("CanvasGroup", {
+                    BackgroundColor3 = Theme("Secondary"),
+                    Visible = false,
+                    ZIndex = 60,
+                    GroupTransparency = 1,
+                    BorderSizePixel = 0,
                 }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
+                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = frame
+                list.Parent = Main
+
+                local scroll = Create("ScrollingFrame", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 1, 0),
+                    CanvasSize = UDim2.new(),
+                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    ScrollBarThickness = 3,
+                    ScrollBarImageColor3 = Theme("Accent"),
+                    BorderSizePixel = 0,
+                    ZIndex = 61,
+                }, {
+                    Create("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+                    Create("UIPadding", {
+                        PaddingTop = UDim.new(0, 4),
+                        PaddingBottom = UDim.new(0, 4),
+                        PaddingLeft = UDim.new(0, 4),
+                        PaddingRight = UDim.new(0, 4),
+                    }),
+                })
+                scroll.Parent = list
+
+                local ROW, GAP, MAXH = 26, 3, 150
+                local open = false
+                local outsideConn = nil
+
+                local function countRows()
+                    local n = 0
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then n = n + 1 end
+                    end
+                    return n
+                end
+
+                local function place()
+                    local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
+                    local rel = btn.AbsolutePosition - Main.AbsolutePosition
+                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
+                    list.Position = below
+                        and UDim2.fromOffset(rel.X, rel.Y + btn.AbsoluteSize.Y + 6)
+                        or UDim2.fromOffset(rel.X, math.max(6, rel.Y - h - 6))
+                    list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                end
 
                 local optButtons = {}
                 local function isSelected(opt)
@@ -1146,7 +1397,7 @@ function Nebula:CreateWindow(config)
                 local function refreshOptionButtons()
                     for opt, ob in pairs(optButtons) do
                         if isSelected(opt) then
-                            ob.Text = "• " .. tostring(opt)
+                            ob.Text = "\u{2022}  " .. tostring(opt)
                             ob.TextColor3 = Theme("Accent")
                         else
                             ob.Text = tostring(opt)
@@ -1156,28 +1407,34 @@ function Nebula:CreateWindow(config)
                 end
 
                 local function rebuild()
-                    for _, c in ipairs(list:GetChildren()) do
-                        if c:IsA("TextButton") then c:Destroy() end
+                    for _, c in ipairs(scroll:GetChildren()) do
+                        if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
                     end
                     optButtons = {}
                     for i, opt in ipairs(options) do
                         local ob = Create("TextButton", {
                             BackgroundColor3 = Theme("Element"),
-                            Size = UDim2.new(1, -8, 0, 26),
-                            Position = UDim2.new(0, 4, 0, (i - 1) * 28 + 4),
+                            Size = UDim2.new(1, 0, 0, ROW),
                             Font = Enum.Font.Gotham,
                             Text = tostring(opt),
                             TextColor3 = Theme("Text"),
                             TextSize = 12,
                             TextXAlignment = Enum.TextXAlignment.Left,
                             AutoButtonColor = false,
+                            ZIndex = 62,
                             LayoutOrder = i,
                         }, {
                             Create("UICorner", { CornerRadius = UDim.new(0, 4) }),
                             Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
                         })
-                        ob.Parent = list
+                        ob.Parent = scroll
                         optButtons[opt] = ob
+                        ob.MouseEnter:Connect(function()
+                            Tween(ob, 0.1, { BackgroundColor3 = Theme("ElementHover") })
+                        end)
+                        ob.MouseLeave:Connect(function()
+                            Tween(ob, 0.1, { BackgroundColor3 = Theme("Element") })
+                        end)
                         ob.MouseButton1Click:Connect(function()
                             if isSelected(opt) then
                                 for idx, v in ipairs(selected) do
@@ -1195,12 +1452,48 @@ function Nebula:CreateWindow(config)
                 end
                 rebuild()
 
-                btn.MouseButton1Click:Connect(function()
-                    open = not open
-                    local h = #options * 28 + 8
-                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
-                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
+                local function setOpen(v)
+                    if open == v then return end
+                    open = v
+                    if v then
+                        if CloseCurrentDropdown and CloseCurrentDropdown ~= setOpen then
+                            CloseCurrentDropdown()
+                        end
+                        CloseCurrentDropdown = setOpen
+                        place()
+                        list.Visible = true
+                        Tween(list, 0.15, { GroupTransparency = 0 })
+                        Tween(stroke, 0.15, { Color = Theme("Accent") })
+                        Tween(arrow, 0.15, { Rotation = 180 })
+                        outsideConn = UserInputService.InputBegan:Connect(function(input)
+                            if input.UserInputType == Enum.UserInputType.MouseButton1
+                            or input.UserInputType == Enum.UserInputType.Touch then
+                                local p, lp, ls = input.Position, list.AbsolutePosition, list.AbsoluteSize
+                                local bp, bs = btn.AbsolutePosition, btn.AbsoluteSize
+                                local inList = p.X >= lp.X and p.X <= lp.X + ls.X and p.Y >= lp.Y and p.Y <= lp.Y + ls.Y
+                                local inBtn = p.X >= bp.X and p.X <= bp.X + bs.X and p.Y >= bp.Y and p.Y <= bp.Y + bs.Y
+                                if not inList and not inBtn then setOpen(false) end
+                            end
+                        end)
+                        table.insert(Nebula.Connections, outsideConn)
+                    else
+                        if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
+                        if outsideConn then outsideConn:Disconnect() outsideConn = nil end
+                        Tween(list, 0.12, { GroupTransparency = 1 })
+                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
+                        Tween(arrow, 0.12, { Rotation = 0 })
+                        task.delay(0.13, function()
+                            if not open and list and list.Parent then list.Visible = false end
+                        end)
+                    end
+                end
+
+                btn.MouseButton1Click:Connect(function() setOpen(not open) end)
+                btn.MouseEnter:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("Accent") }) end
+                end)
+                btn.MouseLeave:Connect(function()
+                    if not open then Tween(stroke, 0.12, { Color = Theme("ElementStroke") }) end
                 end)
 
                 return {
@@ -1254,7 +1547,10 @@ function Nebula:CreateWindow(config)
                 })
                 box.Parent = frame
 
+                -- Freeze character movement while typing
+                box.Focused:Connect(function() SetTyping(true) end)
                 box.FocusLost:Connect(function(enter)
+                    SetTyping(false)
                     Nebula.Flags[flag] = box.Text
                     if callback then callback(box.Text, enter) end
                 end)
@@ -1303,6 +1599,7 @@ function Nebula:CreateWindow(config)
                 local listening = false
                 btn.MouseButton1Click:Connect(function()
                     listening = not listening
+                    SetTyping(listening) -- freeze character while capturing a key
                     btn.Text = listening and "..." or (key and key.Name or "None")
                 end)
 
@@ -1314,8 +1611,10 @@ function Nebula:CreateWindow(config)
                             btn.Text = key.Name
                             Nebula.Flags[flag] = key
                             listening = false
+                            SetTyping(false)
                         elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
                             listening = false
+                            SetTyping(false)
                             btn.Text = key and key.Name or "None"
                         end
                     elseif key and input.KeyCode == key then
