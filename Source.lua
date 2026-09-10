@@ -334,12 +334,32 @@ function Nebula:CreateWindow(config)
 
     MakeControl(-48, "—", function() -- minimize
         minimized = not minimized
-        local target = minimized and UDim2.fromOffset(self.Width, 40) or UDim2.fromOffset(self.Width, self.Height)
-        Tween(Main, 0.25, { Size = target })
-        -- footer is anchored to Main's bottom edge: at 40px height it would sit INSIDE
-        -- the visible title bar, so hide it while minimized
-        local footer = Main:FindFirstChild("Footer")
-        if footer then footer.Visible = not minimized end
+        if minimized then
+            -- close any open dropdown / color picker overlay first
+            if CloseCurrentDropdown then CloseCurrentDropdown() end
+            -- Some executors clip CanvasGroup children unreliably: at 40px height the
+            -- sidebar/content would bleed OUTSIDE the title bar as visual artifacts,
+            -- so hide them explicitly instead of relying on ClipsDescendants
+            for _, name in ipairs({ "Sidebar", "Content", "Footer" }) do
+                local child = Main:FindFirstChild(name)
+                if child then child.Visible = false end
+            end
+        end
+        Tween(Main, 0.25, {
+            Size = minimized and UDim2.fromOffset(self.Width, 40)
+                or UDim2.fromOffset(self.Width, self.Height),
+        })
+        if not minimized then
+            -- restore panels only once the expand tween has finished
+            task.delay(0.26, function()
+                if not minimized and Main and Main.Parent then
+                    for _, name in ipairs({ "Sidebar", "Content", "Footer" }) do
+                        local child = Main:FindFirstChild(name)
+                        if child then child.Visible = true end
+                    end
+                end
+            end)
+        end
     end)
 
     MakeDraggable(TitleBar, Main)
@@ -1231,9 +1251,14 @@ function Nebula:CreateWindow(config)
                             end
                         end)
                         table.insert(Nebula.Connections, outsideConn)
-                        task.defer(function()
-                            if open then searchBox:CaptureFocus() end
-                        end)
+                        -- Only auto-focus on mouse devices: on touch, CaptureFocus pops
+                        -- the on-screen keyboard which steals focus and instantly closes
+                        -- the freshly opened list
+                        if not UserInputService.TouchEnabled then
+                            task.defer(function()
+                                if open then pcall(function() searchBox:CaptureFocus() end) end
+                            end)
+                        end
                     else
                         if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
                         if outsideConn then outsideConn:Disconnect() outsideConn = nil end
@@ -1261,11 +1286,18 @@ function Nebula:CreateWindow(config)
                     place()
                 end)
 
-                -- Freeze character while the search box is focused
-                searchBox.Focused:Connect(function() SetTyping(true) end)
+                -- Freeze character while the search box is focused;
+                -- tapping the field itself also opens the list (the TextBox sinks the
+                -- click, so the button's own click handler never fires)
+                searchBox.Focused:Connect(function()
+                    SetTyping(true)
+                    if not open then setOpen(true) end
+                end)
+                -- FocusLost deliberately does NOT close the list: tapping any option or
+                -- the on-screen keyboard appearing fired FocusLost and the dropdown
+                -- closed itself instantly
                 searchBox.FocusLost:Connect(function()
                     SetTyping(false)
-                    if open then setOpen(false) end
                 end)
 
                 return {
@@ -1426,6 +1458,7 @@ function Nebula:CreateWindow(config)
                 end
 
                 local optButtons = {}
+                local selectAllBtn = nil -- "Select All" row (toggles to "Deselect All")
                 local function isSelected(opt)
                     for _, v in ipairs(selected) do
                         if v == opt then return true end
@@ -1443,6 +1476,12 @@ function Nebula:CreateWindow(config)
                             ob.TextColor3 = Theme("Text")
                         end
                     end
+                    -- the Select All row flips to Deselect All once everything is picked
+                    if selectAllBtn then
+                        local all = #selected >= #options and #options > 0
+                        selectAllBtn.Text = all and "Deselect All" or "Select All"
+                        selectAllBtn.TextColor3 = all and Theme("Accent") or Theme("Text")
+                    end
                 end
 
                 local function rebuild()
@@ -1450,6 +1489,41 @@ function Nebula:CreateWindow(config)
                         if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
                     end
                     optButtons = {}
+
+                    -- pinned "Select All" row: picks everything, or clears everything
+                    -- when every option is already selected
+                    selectAllBtn = Create("TextButton", {
+                        BackgroundColor3 = Theme("Tertiary"),
+                        Size = UDim2.new(1, 0, 0, ROW),
+                        Font = Enum.Font.GothamBold,
+                        Text = "Select All",
+                        TextSize = 12,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        AutoButtonColor = false,
+                        ZIndex = 62,
+                        LayoutOrder = 0,
+                    }, {
+                        Create("UICorner", { CornerRadius = UDim.new(0, 4) }),
+                        Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
+                    })
+                    selectAllBtn.Parent = scroll
+                    selectAllBtn.MouseEnter:Connect(function()
+                        Tween(selectAllBtn, 0.1, { BackgroundColor3 = Theme("ElementHover") })
+                    end)
+                    selectAllBtn.MouseLeave:Connect(function()
+                        Tween(selectAllBtn, 0.1, { BackgroundColor3 = Theme("Tertiary") })
+                    end)
+                    selectAllBtn.MouseButton1Click:Connect(function()
+                        if #selected >= #options and #options > 0 then
+                            selected = {}
+                        else
+                            selected = table.clone(options)
+                        end
+                        refreshOptionButtons()
+                        updateSummary()
+                        sync()
+                    end)
+
                     for i, opt in ipairs(options) do
                         local ob = Create("TextButton", {
                             BackgroundColor3 = Theme("Element"),
@@ -1643,28 +1717,36 @@ function Nebula:CreateWindow(config)
                 end)
 
                 local conn = UserInputService.InputBegan:Connect(function(input, gp)
-                    if gp then return end
                     if listening then
+                        -- While capturing, accept EVERYTHING — movement keys (W, Space,
+                        -- etc.) are flagged gameProcessed, so honoring gp here would make
+                        -- them impossible to bind
                         if input.UserInputType == Enum.UserInputType.Keyboard then
                             key = input.KeyCode
                             btn.Text = key.Name
                             Nebula.Flags[flag] = key
                             listening = false
                             SetTyping(false)
-                        elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        elseif input.UserInputType == Enum.UserInputType.MouseButton1
+                        or input.UserInputType == Enum.UserInputType.MouseButton2 then
+                            -- mouse click = cancel capture without changing the bind
                             listening = false
                             SetTyping(false)
                             btn.Text = key and key.Name or "None"
                         end
-                    elseif key and input.KeyCode == key then
-                        if callback then callback() end
+                    elseif not gp then
+                        -- Activation path: gameProcessed stays ignored here so clicking
+                        -- UI never fires other elements' binds
+                        if key and input.KeyCode == key then
+                            if callback then callback() end
+                        end
                     end
                 end)
                 table.insert(Nebula.Connections, conn)
                 return btn
             end
 
-            -- // ELEMENT: COLOR PICKER //--
+            -- // ELEMENT: COLOR PICKER //-- (floating overlay, exact HEX input)
             function section:CreateColorPicker(text, default, callback, flag)
                 flag = flag or text
                 local color = default or Color3.fromRGB(255, 255, 255)
@@ -1701,27 +1783,31 @@ function Nebula:CreateWindow(config)
                 })
                 swatch.Parent = frame
 
+                -- Floating panel on the window itself (like dropdowns), above all content
                 local pickerOpen = false
-                local picker = Create("Frame", {
-                    AnchorPoint = Vector2.new(1, 0),
+                local outsideConn = nil
+                local closePicker
+                local picker = Create("CanvasGroup", {
                     BackgroundColor3 = Theme("Secondary"),
-                    Position = UDim2.new(1, 0, 1, 6),
-                    Size = UDim2.fromOffset(180, 140),
                     Visible = false,
-                    ZIndex = 50,
+                    ZIndex = 60,
+                    GroupTransparency = 1,
+                    BorderSizePixel = 0,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                picker.Parent = swatch
+                picker.Parent = Main
 
-                local saturation = Create("TextButton", {
+                -- Saturation/value pad: hue base + white gradient (L→R) + black shade (top→bottom)
+                local svPad = Create("TextButton", {
                     BackgroundColor3 = color,
                     Position = UDim2.fromOffset(10, 10),
-                    Size = UDim2.new(1, -20, 0, 70),
+                    Size = UDim2.new(1, -20, 0, 100),
                     Text = "",
                     AutoButtonColor = false,
-                    ZIndex = 51,
+                    ClipsDescendants = true,
+                    ZIndex = 61,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
                     Create("UIGradient", {
@@ -1729,18 +1815,48 @@ function Nebula:CreateWindow(config)
                             NumberSequenceKeypoint.new(0, 0),
                             NumberSequenceKeypoint.new(1, 1),
                         }),
-                        Rotation = 0,  -- horizontal white→transparent
+                        Rotation = 0,
                     }),
                 })
-                saturation.Parent = picker
+                svPad.Parent = picker
 
+                local shade = Create("Frame", {
+                    BackgroundColor3 = Color3.new(0, 0, 0),
+                    Size = UDim2.fromScale(1, 1),
+                    BorderSizePixel = 0,
+                    ZIndex = 62,
+                }, {
+                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+                    Create("UIGradient", {
+                        Transparency = NumberSequence.new({
+                            NumberSequenceKeypoint.new(0, 1), -- top: full value
+                            NumberSequenceKeypoint.new(1, 0), -- bottom: black
+                        }),
+                        Rotation = 90,
+                    }),
+                })
+                shade.Parent = svPad
+
+                local padCursor = Create("Frame", {
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    BackgroundColor3 = Color3.new(1, 1, 1),
+                    Size = UDim2.fromOffset(10, 10),
+                    BorderSizePixel = 0,
+                    ZIndex = 63,
+                }, {
+                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    Create("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, Transparency = 0.4 }),
+                })
+                padCursor.Parent = svPad
+
+                -- Horizontal hue bar (draggable, with cursor)
                 local hueBar = Create("TextButton", {
-                    Position = UDim2.fromOffset(10, 90),
+                    Position = UDim2.fromOffset(10, 118),
                     Size = UDim2.new(1, -20, 0, 12),
                     Text = "",
                     AutoButtonColor = false,
                     BackgroundColor3 = Color3.new(1, 1, 1),
-                    ZIndex = 51,
+                    ZIndex = 61,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                     Create("UIGradient", {
@@ -1757,26 +1873,187 @@ function Nebula:CreateWindow(config)
                 })
                 hueBar.Parent = picker
 
-                local function apply(c)
-                    color = c
-                    Nebula.Flags[flag] = c
-                    swatch.BackgroundColor3 = c
-                    saturation.BackgroundColor3 = c
-                    if callback then callback(c) end
+                local hueCursor = Create("Frame", {
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    BackgroundColor3 = Color3.new(1, 1, 1),
+                    Size = UDim2.fromOffset(4, 16),
+                    BorderSizePixel = 0,
+                    ZIndex = 62,
+                }, {
+                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    Create("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, Transparency = 0.4 }),
+                })
+                hueCursor.Parent = hueBar
+
+                -- Exact color entry: HEX box (e.g. #3BEAFF)
+                local hexRow = Create("Frame", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(10, 140),
+                    Size = UDim2.new(1, -20, 0, 24),
+                    ZIndex = 61,
+                })
+                hexRow.Parent = picker
+
+                local hexLbl = Create("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.fromOffset(34, 24),
+                    Font = Enum.Font.GothamBold,
+                    Text = "HEX",
+                    TextColor3 = Theme("SubText"),
+                    TextSize = 11,
+                    ZIndex = 61,
+                })
+                hexLbl.Parent = hexRow
+
+                local hexBox = Create("TextBox", {
+                    BackgroundColor3 = Theme("Element"),
+                    Position = UDim2.fromOffset(38, 0),
+                    Size = UDim2.new(1, -38, 1, 0),
+                    Font = Enum.Font.Code,
+                    Text = "",
+                    PlaceholderText = "#RRGGBB",
+                    PlaceholderColor3 = Theme("SubText"),
+                    TextColor3 = Theme("Text"),
+                    TextSize = 13,
+                    ClearTextOnFocus = false,
+                    ZIndex = 61,
+                }, {
+                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+                    Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
+                })
+                hexBox.Parent = hexRow
+
+                local hue, sat, val = Color3.toHSV(color)
+
+                local function parseHex(str)
+                    str = tostring(str):gsub("#", ""):gsub("%s", "")
+                    if #str ~= 6 then return nil end
+                    local n = tonumber(str, 16)
+                    if not n then return nil end
+                    return Color3.fromRGB(
+                        math.floor(n / 65536) % 256,
+                        math.floor(n / 256) % 256,
+                        n % 256)
                 end
 
-                swatch.MouseButton1Click:Connect(function()
-                    pickerOpen = not pickerOpen
-                    picker.Visible = pickerOpen
-                end)
+                local function apply(c, silent)
+                    color = c
+                    hue, sat, val = Color3.toHSV(c)
+                    Nebula.Flags[flag] = c
+                    swatch.BackgroundColor3 = c
+                    svPad.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+                    padCursor.Position = UDim2.new(sat, 0, 1 - val, 0)
+                    hueCursor.Position = UDim2.new(hue, 0, 0.5, 0)
+                    if not hexBox:IsFocused() then
+                        hexBox.Text = string.format("#%02X%02X%02X",
+                            math.floor(c.R * 255 + 0.5),
+                            math.floor(c.G * 255 + 0.5),
+                            math.floor(c.B * 255 + 0.5))
+                    end
+                    if not silent and callback then callback(c) end
+                end
 
+                local function setSV(x, y)
+                    sat = math.clamp((x - svPad.AbsolutePosition.X) / math.max(svPad.AbsoluteSize.X, 1), 0, 1)
+                    val = 1 - math.clamp((y - svPad.AbsolutePosition.Y) / math.max(svPad.AbsoluteSize.Y, 1), 0, 1)
+                    apply(Color3.fromHSV(hue, sat, val))
+                end
+
+                local function setHue(x)
+                    hue = math.clamp((x - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
+                    apply(Color3.fromHSV(hue, sat, val))
+                end
+
+                local function setOpen(v)
+                    if pickerOpen == v then return end
+                    pickerOpen = v
+                    if v then
+                        if CloseCurrentDropdown and CloseCurrentDropdown ~= closePicker then
+                            CloseCurrentDropdown()
+                        end
+                        CloseCurrentDropdown = closePicker
+                        -- place near the swatch, clamped inside the window
+                        local w, h = 200, 174
+                        local rel = swatch.AbsolutePosition - Main.AbsolutePosition
+                        local x = math.clamp(rel.X + swatch.AbsoluteSize.X - w, 6, math.max(6, Main.AbsoluteSize.X - w - 6))
+                        local below = rel.Y + swatch.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
+                        local y = below and (rel.Y + swatch.AbsoluteSize.Y + 6) or math.max(6, rel.Y - h - 6)
+                        picker.Position = UDim2.fromOffset(x, y)
+                        picker.Size = UDim2.fromOffset(w, h)
+                        picker.Visible = true
+                        Tween(picker, 0.15, { GroupTransparency = 0 })
+                        outsideConn = UserInputService.InputBegan:Connect(function(input)
+                            if input.UserInputType == Enum.UserInputType.MouseButton1
+                            or input.UserInputType == Enum.UserInputType.Touch then
+                                local p, lp, ls = input.Position, picker.AbsolutePosition, picker.AbsoluteSize
+                                local bp, bs = swatch.AbsolutePosition, swatch.AbsoluteSize
+                                local inPicker = p.X >= lp.X and p.X <= lp.X + ls.X and p.Y >= lp.Y and p.Y <= lp.Y + ls.Y
+                                local inSwatch = p.X >= bp.X and p.X <= bp.X + bs.X and p.Y >= bp.Y and p.Y <= bp.Y + bs.Y
+                                if not inPicker and not inSwatch then setOpen(false) end
+                            end
+                        end)
+                        table.insert(Nebula.Connections, outsideConn)
+                    else
+                        if CloseCurrentDropdown == closePicker then CloseCurrentDropdown = nil end
+                        if outsideConn then outsideConn:Disconnect() outsideConn = nil end
+                        Tween(picker, 0.12, { GroupTransparency = 1 })
+                        task.delay(0.13, function()
+                            if not pickerOpen and picker and picker.Parent then picker.Visible = false end
+                        end)
+                    end
+                end
+                closePicker = function() setOpen(false) end
+
+                local svPadDragging, hueDragging = false, false
+                svPad.InputBegan:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                        svPadDragging = true
+                        setSV(input.Position.X, input.Position.Y)
+                    end
+                end)
                 hueBar.InputBegan:Connect(function(input)
                     if input.UserInputType == Enum.UserInputType.MouseButton1
                     or input.UserInputType == Enum.UserInputType.Touch then
-                        local rel = math.clamp((input.Position.X - hueBar.AbsolutePosition.X) / hueBar.AbsoluteSize.X, 0, 1)
-                        apply(Color3.fromHSV(rel, 1, 1))
+                        hueDragging = true
+                        setHue(input.Position.X)
                     end
                 end)
+                local moveConn = UserInputService.InputChanged:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                        if svPadDragging then
+                            setSV(input.Position.X, input.Position.Y)
+                        elseif hueDragging then
+                            setHue(input.Position.X)
+                        end
+                    end
+                end)
+                local endConn = UserInputService.InputEnded:Connect(function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                        svPadDragging = false
+                        hueDragging = false
+                    end
+                end)
+                table.insert(Nebula.Connections, moveConn)
+                table.insert(Nebula.Connections, endConn)
+
+                swatch.MouseButton1Click:Connect(function() setOpen(not pickerOpen) end)
+
+                hexBox.Focused:Connect(function() SetTyping(true) end)
+                hexBox.FocusLost:Connect(function(enter)
+                    SetTyping(false)
+                    local c = parseHex(hexBox.Text)
+                    if c then
+                        apply(c) -- exact color from HEX
+                    else
+                        apply(color, true) -- invalid input: revert the text
+                    end
+                end)
+
+                apply(color, true) -- set visuals without firing the callback
+
                 return {
                     Set = function(c)
                         apply(c)
