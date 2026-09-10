@@ -107,6 +107,12 @@ local function Create(className, props, children)
     for k, v in pairs(props or {}) do
         inst[k] = v
     end
+    -- UIStroke defaults to Contextual mode, which strokes the TEXT of text widgets
+    -- (unreadable outlines) instead of the border. Every stroke in this library is
+    -- meant as a border, so default to Border mode unless explicitly overridden.
+    if inst:IsA("UIStroke") and props.ApplyStrokeMode == nil then
+        inst.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    end
     for _, child in ipairs(children or {}) do
         child.Parent = inst
     end
@@ -241,6 +247,7 @@ function Nebula:CreateWindow(config)
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(self.Width, self.Height),
         Active = true,
+        ClipsDescendants = true, -- minimize pop-in: sidebar/footer must never spill outside the 40px title bar
     }, {
         Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
         Create("UIStroke", { Name = "Stroke", Color = Theme("ElementStroke"), Thickness = 1.5, Transparency = 0 }),
@@ -329,6 +336,10 @@ function Nebula:CreateWindow(config)
         minimized = not minimized
         local target = minimized and UDim2.fromOffset(self.Width, 40) or UDim2.fromOffset(self.Width, self.Height)
         Tween(Main, 0.25, { Size = target })
+        -- footer is anchored to Main's bottom edge: at 40px height it would sit INSIDE
+        -- the visible title bar, so hide it while minimized
+        local footer = Main:FindFirstChild("Footer")
+        if footer then footer.Visible = not minimized end
     end)
 
     MakeDraggable(TitleBar, Main)
@@ -422,6 +433,7 @@ function Nebula:CreateWindow(config)
             Color = Theme("ElementStroke"),
             Thickness = 1,
             Transparency = 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border, -- Border, not Contextual: Contextual strokes the TEXT and makes it unreadable
         })
         stroke.Parent = btn
 
@@ -644,6 +656,7 @@ function Nebula:CreateWindow(config)
                     Size = UDim2.fromOffset(44, 22),
                     Text = "",
                     AutoButtonColor = false,
+                    ClipsDescendants = true, -- Back-easing knob overshoot must not poke past the pill edge
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
@@ -664,8 +677,9 @@ function Nebula:CreateWindow(config)
                 local function setState(v, noFire)
                     state = v
                     Nebula.Flags[flag] = v
+                    -- ON: knob left edge at 44-3-18 = 23px (AnchorPoint is 0,0.5 — using scale 1,-3 put the knob 15px outside the pill)
                     Tween(knob, 0.18, {
-                        Position = v and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+                        Position = v and UDim2.new(0, 23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
                         BackgroundColor3 = v and Color3.fromRGB(255, 255, 255) or Theme("Text"),
                     }, Enum.EasingStyle.Back)
                     Tween(toggle, 0.15, { BackgroundColor3 = v and Theme("Accent") or Theme("Tertiary") })
