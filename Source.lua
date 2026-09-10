@@ -115,7 +115,7 @@ end
 
 local function Tween(inst, time, props, style, dir)
     local ti = TweenInfo.new(
-        time or 0.25,
+        time or 0.18,
         style or Enum.EasingStyle.Quint,
         dir or Enum.EasingDirection.Out
     )
@@ -209,7 +209,7 @@ function Nebula:CreateWindow(config)
     })
     ScreenGui.Parent = GetGuiParent()
 
-    local Main = Create("Frame", {
+    local Main = Create("CanvasGroup", {
         Name = "Main",
         AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundColor3 = Theme("Background"),
@@ -222,44 +222,13 @@ function Nebula:CreateWindow(config)
     })
     Main.Parent = ScreenGui
 
-    -- // BACKGROUND BUBBLES — Liquid branding //--
-    local BubbleHolder = Create("Frame", {
-        Name = "Bubbles",
-        BackgroundTransparency = 1,
-        Size = UDim2.fromScale(1, 1),
-        ZIndex = 0,
-        ClipsDescendants = true,
+    -- // POP-IN — quick fade + expand from the title bar (WindUI-style) //--
+    Main.Size = UDim2.fromOffset(self.Width, 40)
+    Main.GroupTransparency = 1
+    Tween(Main, 0.35, {
+        Size = UDim2.fromOffset(self.Width, self.Height),
+        GroupTransparency = 0,
     })
-    BubbleHolder.Parent = Main
-
-    task.spawn(function()
-        local rng = Random.new()
-        while BubbleHolder.Parent do
-            local size = rng:NextInteger(10, 34)
-            local bubble = Create("Frame", {
-                BackgroundColor3 = Theme("Accent"),
-                BackgroundTransparency = rng:NextNumber(0.82, 0.93),
-                Position = UDim2.new(rng:NextNumber(0, 1), 0, 1, 10),
-                Size = UDim2.fromOffset(size, size),
-                ZIndex = 0,
-                BorderSizePixel = 0,
-            }, {
-                Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
-            })
-            bubble.Parent = BubbleHolder
-            local dur = rng:NextNumber(6, 12)
-            Tween(bubble, dur, {
-                Position = UDim2.new(
-                    math.clamp(bubble.Position.X.Scale + rng:NextNumber(-0.08, 0.08), 0, 1), 0, -0.12, 0
-                ),
-                BackgroundTransparency = 1,
-            }, Enum.EasingStyle.Linear)
-            task.delay(dur + 0.1, function()
-                if bubble.Parent then bubble:Destroy() end
-            end)
-            task.wait(rng:NextNumber(0.4, 1.1))
-        end
-    end)
 
     local TitleBar = Create("Frame", {
         Name = "TitleBar",
@@ -330,7 +299,7 @@ function Nebula:CreateWindow(config)
     MakeControl(-12, "—", function() -- minimize
         minimized = not minimized
         local target = minimized and UDim2.fromOffset(self.Width, 40) or UDim2.fromOffset(self.Width, self.Height)
-        Tween(Main, 0.35, { Size = target })
+        Tween(Main, 0.25, { Size = target })
     end)
 
     MakeControl(-48, "X", function()
@@ -425,6 +394,13 @@ function Nebula:CreateWindow(config)
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
         })
         page.Parent = self.TabContainer
+        -- Page padding: keeps sections off the window edges
+        Create("UIPadding", {
+            PaddingTop = UDim.new(0, 10),
+            PaddingBottom = UDim.new(0, 10),
+            PaddingLeft = UDim.new(0, 10),
+            PaddingRight = UDim.new(0, 10),
+        }).Parent = page
 
         local left = Create("Frame", {
             BackgroundTransparency = 1,
@@ -458,7 +434,12 @@ function Nebula:CreateWindow(config)
             end
             self.CurrentTab = tab
             page.Visible = true
-            Tween(btn, 0.2, { BackgroundColor3 = Theme("Element"), TextColor3 = Theme("Accent") })
+            -- WindUI-style content slide on tab switch
+            left.Position = UDim2.new(0, 0, 0, 12)
+            right.Position = UDim2.new(0.5, 6, 0, 12)
+            Tween(left, 0.25, { Position = UDim2.new(0, 0, 0, 0) })
+            Tween(right, 0.25, { Position = UDim2.new(0.5, 6, 0, 0) })
+            Tween(btn, 0.18, { BackgroundColor3 = Theme("Element"), TextColor3 = Theme("Accent") })
             stroke.Transparency = 0
             stroke.Color = Theme("Accent")
         end
@@ -618,11 +599,11 @@ function Nebula:CreateWindow(config)
                 local function setState(v, noFire)
                     state = v
                     Nebula.Flags[flag] = v
-                    Tween(knob, 0.2, {
+                    Tween(knob, 0.18, {
                         Position = v and UDim2.new(1, -3, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
                         BackgroundColor3 = v and Color3.fromRGB(255, 255, 255) or Theme("Text"),
-                    })
-                    Tween(toggle, 0.2, { BackgroundColor3 = v and Theme("Accent") or Theme("Tertiary") })
+                    }, Enum.EasingStyle.Back)
+                    Tween(toggle, 0.15, { BackgroundColor3 = v and Theme("Accent") or Theme("Tertiary") })
                     if not noFire and callback then callback(v) end
                 end
                 setState(state, true)
@@ -749,8 +730,8 @@ function Nebula:CreateWindow(config)
                         value = v
                         Nebula.Flags[flag] = v
                         valueLbl.Text = tostring(v) .. (suffix or "")
-                        fill.Size = UDim2.new(rel, 0, 1, 0)
-                        knob.Position = UDim2.new(rel, 0, 0.5, 0)
+                        Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
+                        Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
                     end,
                     Get = function() return value end,
                 }
@@ -855,9 +836,9 @@ function Nebula:CreateWindow(config)
                             selectedLbl.Text = tostring(opt)
                             if callback then callback(opt) end
                             open = false
-                            Tween(list, 0.25, { Size = UDim2.new(1, 0, 0, 0) })
-                            Tween(frame, 0.25, { Size = UDim2.new(1, 0, 0, 56) })
-                            Tween(arrow, 0.25, { Rotation = 0 })
+                            Tween(list, 0.18, { Size = UDim2.new(1, 0, 0, 0) })
+                            Tween(frame, 0.18, { Size = UDim2.new(1, 0, 0, 56) })
+                            Tween(arrow, 0.18, { Rotation = 0 })
                         end)
                     end
                 end
@@ -866,9 +847,9 @@ function Nebula:CreateWindow(config)
                 btn.MouseButton1Click:Connect(function()
                     open = not open
                     local h = #options * 28 + 8
-                    Tween(list, 0.25, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.25, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
-                    Tween(arrow, 0.25, { Rotation = open and 180 or 0 })
+                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
+                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
+                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
                 end)
 
                 return {
@@ -894,7 +875,7 @@ function Nebula:CreateWindow(config)
 
                 local frame = Create("Frame", {
                     BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, 82),
+                    Size = UDim2.new(1, 0, 0, 56),
                     LayoutOrder = nextOrder(),
                     ClipsDescendants = true,
                 })
@@ -990,9 +971,9 @@ function Nebula:CreateWindow(config)
                                 searchBox.Text = ""
                                 if callback then callback(opt) end
                                 open = false
-                                Tween(list, 0.25, { Size = UDim2.new(1, 0, 0, 0) })
-                                Tween(frame, 0.25, { Size = UDim2.new(1, 0, 0, 82) })
-                                Tween(arrow, 0.25, { Rotation = 0 })
+                                Tween(list, 0.18, { Size = UDim2.new(1, 0, 0, 0) })
+                                Tween(frame, 0.18, { Size = UDim2.new(1, 0, 0, 56) })
+                                Tween(arrow, 0.18, { Rotation = 0 })
                             end)
                         end
                     end
@@ -1027,9 +1008,9 @@ function Nebula:CreateWindow(config)
                     searchBox.Text = ""
                     rebuild("")
                     local h = currentHeight()
-                    Tween(list, 0.25, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.25, { Size = open and UDim2.new(1, 0, 0, 82 + h + 4) or UDim2.new(1, 0, 0, 82) })
-                    Tween(arrow, 0.25, { Rotation = open and 180 or 0 })
+                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
+                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h) or UDim2.new(1, 0, 0, 56) })
+                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
                     if open then searchBox:CaptureFocus() end
                 end)
 
@@ -1038,7 +1019,7 @@ function Nebula:CreateWindow(config)
                     rebuild(searchBox.Text)
                     local h = currentHeight()
                     list.Size = UDim2.new(1, 0, 0, h)
-                    frame.Size = UDim2.new(1, 0, 0, 82 + h + 4)
+                    frame.Size = UDim2.new(1, 0, 0, 56 + h)
                 end)
 
                 return {
@@ -1217,9 +1198,9 @@ function Nebula:CreateWindow(config)
                 btn.MouseButton1Click:Connect(function()
                     open = not open
                     local h = #options * 28 + 8
-                    Tween(list, 0.25, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
-                    Tween(frame, 0.25, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
-                    Tween(arrow, 0.25, { Rotation = open and 180 or 0 })
+                    Tween(list, 0.18, { Size = open and UDim2.new(1, 0, 0, h) or UDim2.new(1, 0, 0, 0) })
+                    Tween(frame, 0.18, { Size = open and UDim2.new(1, 0, 0, 56 + h + 4) or UDim2.new(1, 0, 0, 56) })
+                    Tween(arrow, 0.18, { Rotation = open and 180 or 0 })
                 end)
 
                 return {
@@ -1523,7 +1504,7 @@ function Nebula:CreateWindow(config)
         m.Parent = notifGui
 
         notifGui.Position = UDim2.new(1, 300, 1, -20)
-        Tween(notifGui, 0.4, { Position = UDim2.new(1, -20, 1, -20) }, Enum.EasingStyle.Back)
+        Tween(notifGui, 0.3, { Position = UDim2.new(1, -20, 1, -20) }, Enum.EasingStyle.Back)
         task.delay(duration, function()
             if notifGui and notifGui.Parent then
                 Tween(notifGui, 0.3, { Position = UDim2.new(1, 300, 1, -20) })
@@ -1546,12 +1527,34 @@ function Nebula:CreateWindow(config)
     -- // THEME SWITCHING //--
     function self:SetTheme(name)
         if not Nebula.Themes[name] then return end
+        local old = Nebula.Themes[Nebula.Theme]
+        local new = Nebula.Themes[name]
         Nebula.Theme = name
-        -- walk and update (basic implementation for main frame)
-        Main.BackgroundColor3 = Nebula.Themes[name].Background
-        TitleBar.BackgroundColor3 = Nebula.Themes[name].Secondary
-        Sidebar.BackgroundColor3 = Nebula.Themes[name].Secondary
-        Title.TextColor3 = Nebula.Themes[name].Text
+        -- Remap EVERY descendant whose color matches the old palette -> new palette
+        local oldMap = {}
+        for k, v in pairs(old) do oldMap[v] = k end
+        for _, obj in ipairs(Main:GetDescendants()) do
+            if obj:IsA("GuiObject") then
+                local key = oldMap[obj.BackgroundColor3]
+                if key then obj.BackgroundColor3 = new[key] end
+                if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
+                    local tkey = oldMap[obj.TextColor3]
+                    if tkey then obj.TextColor3 = new[tkey] end
+                end
+                if obj:IsA("TextBox") then
+                    local pkey = oldMap[obj.PlaceholderColor3]
+                    if pkey then obj.PlaceholderColor3 = new[pkey] end
+                end
+            elseif obj:IsA("UIStroke") then
+                local skey = oldMap[obj.Color]
+                if skey then obj.Color = new[skey] end
+            elseif obj:IsA("ScrollingFrame") then
+                local bkey = oldMap[obj.ScrollBarImageColor3]
+                if bkey then obj.ScrollBarImageColor3 = new[bkey] end
+            end
+        end
+        Main.BackgroundColor3 = new.Background
+        Title.TextColor3 = new.Text
         self:Notify("Theme", "Switched to " .. name .. " theme", 2)
     end
 
