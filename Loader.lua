@@ -1,27 +1,120 @@
 --[[───────────────────────────────────────────────────────────────
-    💧 LIQUID HUB — one-file demo hub
-    Paste this whole file into your executor, or upload it to GitHub
-    and use the loadstring from README.md.
+    💧 LIQUID HUB — loader v2.2 (self-diagnosing)
+
+    What changed vs v2.1:
+      • waits for the player to exist (running too early killed everything)
+      • downloads with a cache-busting parameter + jsDelivr mirror
+        (stale cached copies could be served as the "current" library)
+      • EVERY failure (download / compile / library / window) now shows a
+        red on-screen box with the exact error — no more silent nothing
 ───────────────────────────────────────────────────────────────]]
 
-local SOURCE_URL = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Source.lua"
+local VERSION = "v2.2"
+local SOURCES = {
+    "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Source.lua",
+    "https://cdn.jsdelivr.net/gh/tyanxblack2-max/asdfasd@main/Source.lua",
+}
 
-local ok, Liquid = pcall(function()
-    return loadstring(game:HttpGet(SOURCE_URL))()
-end)
+print("[Liquid Hub] Loading " .. VERSION .. " ...")
 
-if not ok or type(Liquid) ~= "table" then
-    warn("[Liquid Hub] Library failed to load: " .. tostring(Liquid))
+-- // Wait for the player: executing before spawn breaks everything below //--
+local Players = game:GetService("Players")
+local waited = 0
+while not Players.LocalPlayer and waited < 10 do
+    task.wait(0.1)
+    waited = waited + 0.1
+end
+
+-- // Visible error box: warn() alone looks like "nothing happened" //--
+local function showLoaderError(msg)
+    warn("[Liquid Hub] " .. msg)
+    pcall(function()
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "LiquidHubLoaderError"
+        gui.ResetOnSpawn = false
+        local parented = pcall(function()
+            gui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
+        end)
+        if not parented then
+            gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+        end
+
+        local f = Instance.new("Frame")
+        f.AnchorPoint = Vector2.new(0.5, 1)
+        f.Position = UDim2.new(0.5, 0, 1, -20)
+        f.Size = UDim2.new(0, 440, 0, 120)
+        f.BackgroundColor3 = Color3.fromRGB(26, 12, 12)
+        f.BorderSizePixel = 0
+        f.Parent = gui
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+        local st = Instance.new("UIStroke", f)
+        st.Color = Color3.fromRGB(235, 60, 60)
+        st.Thickness = 1.5
+
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1, -20, 1, -16)
+        t.Position = UDim2.new(0, 10, 0, 8)
+        t.BackgroundTransparency = 1
+        t.TextColor3 = Color3.fromRGB(255, 130, 130)
+        t.TextSize = 13
+        t.Font = Enum.Font.Code
+        t.TextWrapped = true
+        t.TextXAlignment = Enum.TextXAlignment.Left
+        t.TextYAlignment = Enum.TextYAlignment.Top
+        t.Text = "💧 Liquid Hub " .. VERSION .. " — load error:\n" .. msg
+        t.Parent = f
+
+        task.delay(20, function() gui:Destroy() end)
+    end)
+end
+
+-- // Download with cache-busting + mirror fallback //--
+local source, lastErr
+for _, url in ipairs(SOURCES) do
+    local ok, res = pcall(function()
+        return game:HttpGet(url .. "?nocache=" .. tostring(os.time()))
+    end)
+    if ok and type(res) == "string" and #res > 2000 then
+        source = res
+        print("[Liquid Hub] Library downloaded from: " .. url)
+        break
+    end
+    lastErr = res
+end
+
+if not source then
+    showLoaderError("Не удалось скачать библиотеку (download failed):\n" .. tostring(lastErr))
     return
 end
 
-local Window = Liquid:CreateWindow({
-    Title     = "Liquid Hub",
-    SubTitle  = "v2.0",
-    ToggleKey = Enum.KeyCode.RightControl,
-    Width     = 680,
-    Height    = 440,
-})
+-- // Compile //--
+local chunk, compileErr = (loadstring or load)(source)
+if not chunk then
+    showLoaderError("Ошибка компиляции (compile error):\n" .. tostring(compileErr))
+    return
+end
+
+-- // Run the library //--
+local okLib, Liquid = pcall(chunk)
+if not okLib or type(Liquid) ~= "table" then
+    showLoaderError("Ошибка запуска библиотеки (library error):\n" .. tostring(Liquid))
+    return
+end
+
+-- // Build the window //--
+local okWin, Window = pcall(function()
+    return Liquid:CreateWindow({
+        Title     = "Liquid Hub",
+        SubTitle  = VERSION,
+        ToggleKey = Enum.KeyCode.RightControl,
+        Width     = 680,
+        Height    = 440,
+    })
+end)
+if not okWin or type(Window) ~= "table" then
+    showLoaderError("Ошибка создания окна (CreateWindow error):\n" .. tostring(Window))
+    return
+end
 
 -- // TABS //--
 local MainTab     = Window:CreateTab("Main", "💧")
