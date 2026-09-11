@@ -187,6 +187,9 @@ local function MakeDraggable(dragInput, dragTarget)
     dragInput.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
+            -- overlays are placed in absolute coordinates now: close them on drag
+            -- start so they don't get stranded away from the window
+            if CloseCurrentDropdown then CloseCurrentDropdown() end
             dragging = true
             dragStart = input.Position
             startPos = dragTarget.Position
@@ -513,6 +516,28 @@ function Nebula:CreateWindow(config)
         for _, c in ipairs(Nebula.Connections) do c:Disconnect() end
     end))
 
+    -- // OVERLAY PLACEMENT //-- position a floating dropdown/color-picker so that
+    -- it (and its stroke) stays fully inside the window. Overlays are parented to
+    -- the ScreenGui (not to Main), so placement uses absolute coordinates and we
+    -- never rely on CanvasGroup clipping, which some executors apply unreliably.
+    local function PlaceOverlay(overlay, anchorPos, anchorSize, w, h)
+        local mx, my = Main.AbsolutePosition.X, Main.AbsolutePosition.Y
+        local mw, mh = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
+        local margin = 6
+        local ax, ay, ah = anchorPos.X, anchorPos.Y, anchorSize.Y
+        -- prefer below the anchor; flip above when it would cross the window edge
+        local y
+        if ay + ah + margin + h <= my + mh - margin then
+            y = ay + ah + margin
+        else
+            y = ay - h - margin
+        end
+        y = math.clamp(y, my + margin, math.max(my + margin, my + mh - margin - h))
+        local x = math.clamp(ax, mx + margin, math.max(mx + margin, mx + mw - margin - w))
+        overlay.Position = UDim2.fromOffset(x, y)
+        overlay.Size = UDim2.fromOffset(w, h)
+    end
+
     -- // TAB CREATION //--
     function self:CreateTab(name, icon)
         local tab = {}
@@ -689,186 +714,6 @@ function Nebula:CreateWindow(config)
                 return order
             end
 
-            -- // FAVORITES //-- star an element on hover and a mirrored copy of it
-            -- collects in a pinned box at the top of this column
-            local favRow, favItems = nil, {}
-
-            local function makeFavoritesRow()
-                if favRow then return favRow end
-                favRow = Create("Frame", {
-                    BackgroundColor3 = Theme("Secondary"),
-                    Size = UDim2.new(1, 0, 0, 0),
-                    AutomaticSize = Enum.AutomaticSize.Y,
-                    LayoutOrder = -1, -- UIListLayout keeps it above every section
-                    Visible = false,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
-                    Create("UIStroke", { Color = Theme("Accent"), Thickness = 1, Transparency = 0.5 }),
-                    Create("UIPadding", {
-                        PaddingTop = UDim.new(0, 10),
-                        PaddingBottom = UDim.new(0, 10),
-                        PaddingLeft = UDim.new(0, 12),
-                        PaddingRight = UDim.new(0, 12),
-                    }),
-                    Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
-                })
-                local head = Create("TextLabel", {
-                    BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, 16),
-                    Font = Enum.Font.GothamBold,
-                    Text = "\u{2B50}  FAVORITES",
-                    TextColor3 = Theme("Text"),
-                    TextSize = 14,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    LayoutOrder = 0,
-                })
-                head.Parent = favRow
-                favRow.Parent = side
-                return favRow
-            end
-
-            local function removeFavorite(item)
-                local kept = {}
-                for _, it in ipairs(favItems) do
-                    if it ~= item then table.insert(kept, it) end
-                end
-                favItems = kept
-                local i = 1
-                for _, it in ipairs(favItems) do
-                    it.LayoutOrder = i
-                    i = i + 1
-                end
-                if #favItems == 0 and favRow then favRow.Visible = false end
-            end
-
-            local function makeMirrorButton(text, callback)
-                local row = Create("TextButton", {
-                    BackgroundColor3 = Theme("Element"),
-                    Size = UDim2.new(1, 0, 0, 28),
-                    Font = Enum.Font.GothamMedium,
-                    Text = text,
-                    TextColor3 = Theme("Text"),
-                    TextSize = 12,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    AutoButtonColor = false,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
-                })
-                row.MouseEnter:Connect(function()
-                    Tween(row, 0.1, { BackgroundColor3 = Theme("ElementHover") })
-                end)
-                row.MouseLeave:Connect(function()
-                    Tween(row, 0.1, { BackgroundColor3 = Theme("Element") })
-                end)
-                row.MouseButton1Click:Connect(function()
-                    if callback then callback() end
-                end)
-                return row
-            end
-
-            local function makeMirrorToggle(text, setState, initialState)
-                local row = Create("TextButton", {
-                    BackgroundColor3 = Theme("Element"),
-                    Size = UDim2.new(1, 0, 0, 28),
-                    Font = Enum.Font.GothamMedium,
-                    Text = "",
-                    AutoButtonColor = false,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
-                })
-                local state = initialState and true or false
-                local t = Create("TextLabel", {
-                    BackgroundTransparency = 1,
-                    Size = UDim2.new(1, -30, 1, 0),
-                    Font = Enum.Font.GothamMedium,
-                    Text = text,
-                    TextColor3 = Theme("Text"),
-                    TextSize = 12,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextTruncate = Enum.TextTruncate.AtEnd,
-                })
-                t.Parent = row
-                local dot = Create("Frame", {
-                    AnchorPoint = Vector2.new(1, 0.5),
-                    BackgroundColor3 = state and Theme("Accent") or Theme("Tertiary"),
-                    Position = UDim2.new(1, -6, 0.5, 0),
-                    Size = UDim2.fromOffset(10, 10),
-                    BorderSizePixel = 0,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                })
-                dot.Parent = row
-                row.MouseButton1Click:Connect(function()
-                    state = not state
-                    setState(state)
-                    Tween(dot, 0.12, { BackgroundColor3 = state and Theme("Accent") or Theme("Tertiary") })
-                end)
-                return row, {
-                    Sync = function(v)
-                        state = v and true or false
-                        Tween(dot, 0.12, { BackgroundColor3 = state and Theme("Accent") or Theme("Tertiary") })
-                    end,
-                }
-            end
-
-            -- Adds a hover star to an element; starring mirrors it into the
-            -- Favorites box. Returns nil on mobile (keeps touch rows uncluttered).
-            local function MakeStarable(element, starPos, buildMirror)
-                if Mobile then return nil end
-
-                local star = Create("TextButton", {
-                    AnchorPoint = Vector2.new(1, 0.5),
-                    BackgroundTransparency = 1,
-                    Position = starPos or UDim2.new(1, -2, 0.5, 0),
-                    Size = UDim2.fromOffset(22, 22),
-                    Font = Enum.Font.GothamBold,
-                    Text = "\u{2606}",
-                    TextColor3 = Theme("SubText"),
-                    TextSize = 15,
-                    Visible = false,
-                    ZIndex = 5,
-                })
-                star.Parent = element
-
-                local favorited = false
-                local mirror, mirrorControls = nil, nil
-
-                local function setFavorited(v)
-                    favorited = v
-                    star.Text = v and "\u{2605}" or "\u{2606}"
-                    star.TextColor3 = v and Theme("Accent") or Theme("SubText")
-                    star.Visible = true
-                    if v then
-                        local row = makeFavoritesRow()
-                        mirror, mirrorControls = buildMirror()
-                        mirror.LayoutOrder = #favItems + 1
-                        mirror.Parent = row
-                        table.insert(favItems, mirror)
-                        row.Visible = true
-                    else
-                        if mirror then removeFavorite(mirror) end
-                        mirror, mirrorControls = nil, nil
-                    end
-                end
-
-                star.MouseButton1Click:Connect(function()
-                    setFavorited(not favorited)
-                end)
-                element.MouseEnter:Connect(function()
-                    if not favorited then star.Visible = true end
-                end)
-                element.MouseLeave:Connect(function()
-                    if not favorited then star.Visible = false end
-                end)
-
-                return {
-                    SetFavorited = setFavorited,
-                    Mirror = function() return mirror, mirrorControls end,
-                }
-            end
-
             -- // ELEMENT: LABEL //--
             function section:CreateLabel(text)
                 local l = Create("TextLabel", {
@@ -906,9 +751,6 @@ function Nebula:CreateWindow(config)
                     if callback then callback() end
                 end)
                 Ripple(b)
-                MakeStarable(b, nil, function()
-                    return makeMirrorButton(text, callback)
-                end)
                 return b
             end
 
@@ -964,7 +806,6 @@ function Nebula:CreateWindow(config)
                 })
                 knob.Parent = toggle
 
-                local mirrorSync = nil -- set once this toggle gets starred
                 local function setState(v, noFire)
                     state = v
                     Nebula.Flags[flag] = v
@@ -974,7 +815,6 @@ function Nebula:CreateWindow(config)
                         BackgroundColor3 = v and Color3.fromRGB(255, 255, 255) or Theme("Text"),
                     }, Enum.EasingStyle.Back)
                     Tween(toggle, 0.15, { BackgroundColor3 = v and Theme("Accent") or Theme("Tertiary") })
-                    if mirrorSync then mirrorSync(v) end
                     if not noFire and callback then callback(v) end
                 end
                 setState(state, true)
@@ -990,22 +830,14 @@ function Nebula:CreateWindow(config)
                     Tween(toggle, 0.12, { BackgroundColor3 = state and Theme("Accent") or Theme("Tertiary") })
                 end)
 
-                local starWrap = MakeStarable(frame, UDim2.new(1, -52, 0.5, 0), function()
-                    local mirror, mc = makeMirrorToggle(text, setState, state)
-                    mirrorSync = function(v)
-                        if mc then mc.Sync(v) end
-                    end
-                    return mirror
-                end)
-
                 return {
                     Set = function(v) setState(v, true) end,
                     Get = function() return state end,
-                    SetFavorited = starWrap and starWrap.SetFavorited or nil,
                 }
             end
 
-            -- // ELEMENT: SLIDER //--
+            -- // ELEMENT: SLIDER //-- (Chiyo style: "83 s/600 s" next to the label,
+            -- bar on the row below; the value doubles as an exact-input TextBox)
             function section:CreateSlider(text, min, max, default, callback, flag, suffix)
                 flag = flag or text
                 min = min or 0
@@ -1015,14 +847,19 @@ function Nebula:CreateWindow(config)
 
                 local frame = Create("Frame", {
                     BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, sz(56)),
+                    Size = UDim2.new(1, 0, 0, sz(42)),
                     LayoutOrder = nextOrder(),
                 })
                 frame.Parent = holder
 
+                -- Chiyo value format: current + suffix + "/" + max + suffix
+                local function fmt(v)
+                    return tostring(v) .. (suffix or "") .. "/" .. tostring(max) .. (suffix or "")
+                end
+
                 local lbl = Create("TextLabel", {
                     BackgroundTransparency = 1,
-                    Size = UDim2.new(1, -sz(90), 0, sz(16)),
+                    Size = UDim2.new(1, -sz(150), 0, sz(16)),
                     Font = Enum.Font.GothamMedium,
                     Text = text,
                     TextColor3 = Theme("Text"),
@@ -1037,10 +874,10 @@ function Nebula:CreateWindow(config)
                     AnchorPoint = Vector2.new(1, 0),
                     BackgroundTransparency = 1,
                     Position = UDim2.new(1, 0, 0, 0),
-                    Size = UDim2.new(0, sz(90), 0, sz(16)),
-                    Font = Enum.Font.GothamBold,
-                    Text = tostring(value) .. (suffix or ""),
-                    TextColor3 = Theme("Accent"),
+                    Size = UDim2.new(0, sz(150), 0, sz(16)),
+                    Font = Enum.Font.GothamMedium,
+                    Text = fmt(value),
+                    TextColor3 = Theme("Text"),
                     TextSize = 13,
                     TextXAlignment = Enum.TextXAlignment.Right,
                     ClearTextOnFocus = false,
@@ -1084,7 +921,7 @@ function Nebula:CreateWindow(config)
                     value = math.floor(min + (max - min) * rel + 0.5)
                     Nebula.Flags[flag] = value
                     if not valueBox:IsFocused() then
-                        valueBox.Text = tostring(value) .. (suffix or "")
+                        valueBox.Text = fmt(value)
                     end
                     fill.Size = UDim2.new(rel, 0, 1, 0)
                     knob.Position = UDim2.new(rel, 0, 0.5, 0)
@@ -1116,13 +953,13 @@ function Nebula:CreateWindow(config)
                 local function commitTyped()
                     local n = tonumber(valueBox.Text:match("-?%d+%.?%d*"))
                     if not n then
-                        valueBox.Text = tostring(value) .. (suffix or "")
+                        valueBox.Text = fmt(value)
                         return
                     end
                     value = math.clamp(math.floor(n + 0.5), min, max)
                     Nebula.Flags[flag] = value
                     local rel = (value - min) / (max - min)
-                    valueBox.Text = tostring(value) .. (suffix or "")
+                    valueBox.Text = fmt(value)
                     Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
                     Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
                     if callback then callback(value) end
@@ -1140,7 +977,7 @@ function Nebula:CreateWindow(config)
                         local rel = (v - min) / (max - min)
                         value = v
                         Nebula.Flags[flag] = v
-                        valueBox.Text = tostring(v) .. (suffix or "")
+                        valueBox.Text = fmt(v)
                         Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
                         Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
                     end,
@@ -1223,7 +1060,7 @@ function Nebula:CreateWindow(config)
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = Main
+                list.Parent = ScreenGui
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1266,15 +1103,7 @@ function Nebula:CreateWindow(config)
                         end
                         CloseCurrentDropdown = setOpen
                         local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                        local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                        local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
-                        -- clamp fully inside the window so the list stroke never crosses its edge
-                        local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
-                        local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
-                        local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
-                        y = math.clamp(y, 6, math.max(6, winH - h - 6))
-                        list.Position = UDim2.fromOffset(x, y)
-                        list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                        PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
                         list.Visible = true
                         Tween(list, 0.15, { GroupTransparency = 0 })
                         Tween(stroke, 0.15, { Color = Theme("Accent") })
@@ -1458,7 +1287,7 @@ function Nebula:CreateWindow(config)
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = Main
+                list.Parent = ScreenGui
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1495,15 +1324,7 @@ function Nebula:CreateWindow(config)
 
                 local function place()
                     local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                    local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                    local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
-                    -- clamp fully inside the window so the list stroke never crosses its edge
-                    local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
-                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
-                    local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
-                    y = math.clamp(y, 6, math.max(6, winH - h - 6))
-                    list.Position = UDim2.fromOffset(x, y)
-                    list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                    PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
                 end
 
                 local function rebuild(filter)
@@ -1753,7 +1574,7 @@ function Nebula:CreateWindow(config)
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = Main
+                list.Parent = ScreenGui
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1789,15 +1610,7 @@ function Nebula:CreateWindow(config)
 
                 local function place()
                     local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                    local rel = btn.AbsolutePosition - Main.AbsolutePosition
-                    local winW, winH = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
-                    -- clamp fully inside the window so the list stroke never crosses its edge
-                    local x = math.clamp(rel.X, 6, math.max(6, winW - btn.AbsoluteSize.X - 6))
-                    local below = rel.Y + btn.AbsoluteSize.Y + 6 + h < winH - 6
-                    local y = below and (rel.Y + btn.AbsoluteSize.Y + 6) or (rel.Y - h - 6)
-                    y = math.clamp(y, 6, math.max(6, winH - h - 6))
-                    list.Position = UDim2.fromOffset(x, y)
-                    list.Size = UDim2.fromOffset(btn.AbsoluteSize.X, h)
+                    PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
                 end
 
                 local optButtons = {}
@@ -2034,6 +1847,7 @@ function Nebula:CreateWindow(config)
                     TextColor3 = Theme("Text"),
                     TextSize = 13,
                     TextXAlignment = Enum.TextXAlignment.Left,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
                 })
                 lbl.Parent = frame
 
@@ -2055,11 +1869,12 @@ function Nebula:CreateWindow(config)
                 local listening = false
                 local preKey = nil
 
-                -- listening look: accent-filled button + hint on the label, so it's
-                -- obvious a rebind is being captured
+                -- listening look: accent-filled button with "..." + accent hint on the
+                -- label + glowing stroke, so it's impossible to miss that a rebind
+                -- is being captured
                 local bindStroke = Create("UIStroke", {
                     Color = Theme("Accent"),
-                    Thickness = 1.5,
+                    Thickness = 2.5,
                     Transparency = 1,
                 })
                 bindStroke.Parent = btn
@@ -2070,17 +1885,21 @@ function Nebula:CreateWindow(config)
                     if on then
                         preKey = key
                         btn.Text = "..."
+                        btn.TextSize = 15
                         btn.TextColor3 = Theme("Background")
                         Tween(btn, 0.12, { BackgroundColor3 = Theme("Accent") })
-                        Tween(bindStroke, 0.12, { Transparency = 0 })
-                        lbl.Text = text .. "  (press a key, then Enter / click)"
+                        Tween(bindStroke, 0.12, { Transparency = 0.2 })
+                        lbl.Text = text .. " — press a key, then Enter / click"
+                        lbl.TextColor3 = Theme("Accent")
                     else
                         btn.Text = key and key.Name or "None"
+                        btn.TextSize = 12
                         btn.TextColor3 = Theme("Accent")
                         Nebula.Flags[flag] = key
                         Tween(btn, 0.12, { BackgroundColor3 = Theme("Element") })
                         Tween(bindStroke, 0.12, { Transparency = 1 })
                         lbl.Text = text
+                        lbl.TextColor3 = Theme("Text")
                     end
                 end
 
@@ -2106,7 +1925,7 @@ function Nebula:CreateWindow(config)
                                 setListening(false) -- Enter = confirm
                             else
                                 key = input.KeyCode
-                                btn.Text = key.Name -- shown immediately, confirmed on Enter/click
+                                btn.Text = key.Name -- candidate shown instantly, confirmed on Enter/click
                             end
                         elseif input.UserInputType == Enum.UserInputType.MouseButton1
                         or input.UserInputType == Enum.UserInputType.MouseButton2 then
@@ -2177,7 +1996,7 @@ function Nebula:CreateWindow(config)
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                picker.Parent = Main
+                picker.Parent = ScreenGui
 
                 -- Saturation/value pad: hue base + white gradient (L→R) + black shade (top→bottom)
                 local svPad = Create("TextButton", {
@@ -2352,16 +2171,8 @@ function Nebula:CreateWindow(config)
                             CloseCurrentDropdown()
                         end
                         CloseCurrentDropdown = closePicker
-                        -- place near the swatch, clamped inside the window
-                        local w, h = 200, 174
-                        local rel = swatch.AbsolutePosition - Main.AbsolutePosition
-                        local x = math.clamp(rel.X + swatch.AbsoluteSize.X - w, 6, math.max(6, Main.AbsoluteSize.X - w - 6))
-                        local below = rel.Y + swatch.AbsoluteSize.Y + 6 + h < Main.AbsoluteSize.Y - 6
-                        local y = below and (rel.Y + swatch.AbsoluteSize.Y + 6) or math.max(6, rel.Y - h - 6)
-                        -- keep fully inside the window: the stroke must never cross its edge
-                        y = math.clamp(y, 6, math.max(6, Main.AbsoluteSize.Y - h - 6))
-                        picker.Position = UDim2.fromOffset(x, y)
-                        picker.Size = UDim2.fromOffset(w, h)
+                        -- place near the swatch, fully inside the window
+                        PlaceOverlay(picker, swatch.AbsolutePosition, swatch.AbsoluteSize, 200, 174)
                         picker.Visible = true
                         Tween(picker, 0.15, { GroupTransparency = 0 })
                         outsideConn = UserInputService.InputBegan:Connect(function(input)
@@ -2516,6 +2327,9 @@ function Nebula:CreateWindow(config)
     local toggleConn = UserInputService.InputBegan:Connect(function(input, gp)
         if gp then return end
         if input.KeyCode == self.ToggleKey then
+            -- overlays now live on the ScreenGui: close them so they don't linger
+            -- on screen when the window itself is hidden
+            if CloseCurrentDropdown then CloseCurrentDropdown() end
             Main.Visible = not Main.Visible
         end
     end)
