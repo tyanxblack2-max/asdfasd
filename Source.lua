@@ -6,7 +6,7 @@
     ██║ ╚████║███████╗██████╔╝╚██████╔╝███████╗██║  ██║
     ██║  ╚███║╚══════╝╚═════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝
 
-    LIQUID HUB UI LIBRARY v2.2 — "Deep Water"
+    LIQUID HUB UI LIBRARY v2.3 — "Deep Water"
     A modern, fully-featured UI library built for Roblox script executors.
 
     Executor compatibility: Delta, Real Executor, Hydrogen, Fluxus, Codex,
@@ -255,7 +255,7 @@ function Nebula:CreateWindow(config)
     self.Keybinds = {}
     self.ConfigFolder = config.ConfigFolder or "LiquidHubConfig"
     self.TitleText = config.Title or "Liquid Hub"
-    self.SubTitle = config.SubTitle or "v2.2"
+    self.SubTitle = config.SubTitle or "v2.3"
 
     -- Auto-fit to small screens (phones)
     local viewport = (Camera and Camera.ViewportSize) or Vector2.new(1280, 720)
@@ -497,7 +497,7 @@ function Nebula:CreateWindow(config)
         Size = UDim2.new(1, 0, 0, 22),
         Font = Enum.Font.Gotham,
         RichText = true,
-        Text = "discord.gg/liquidhub  |  <b>Liquid Hub v2.2</b>",
+        Text = "discord.gg/liquidhub  |  <b>Liquid Hub v2.3</b>",
         TextColor3 = Theme("SubText"),
         TextSize = 12,
     })
@@ -516,26 +516,39 @@ function Nebula:CreateWindow(config)
         for _, c in ipairs(Nebula.Connections) do c:Disconnect() end
     end))
 
-    -- // OVERLAY PLACEMENT //-- position a floating dropdown/color-picker so that
-    -- it (and its stroke) stays fully inside the window. Overlays are parented to
-    -- the ScreenGui (not to Main), so placement uses absolute coordinates and we
-    -- never rely on CanvasGroup clipping, which some executors apply unreliably.
-    local function PlaceOverlay(overlay, anchorPos, anchorSize, w, h)
-        local mx, my = Main.AbsolutePosition.X, Main.AbsolutePosition.Y
-        local mw, mh = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
-        local margin = 6
-        local ax, ay, ah = anchorPos.X, anchorPos.Y, anchorSize.Y
-        -- prefer below the anchor; flip above when it would cross the window edge
-        local y
-        if ay + ah + margin + h <= my + mh - margin then
-            y = ay + ah + margin
+    -- // INLINE LIST OPENER //-- Chiyo-style dropdown: the option list expands
+    -- INSIDE the section card and pushes the content below it down, so it can
+    -- never cross the window border (pages always clip their content).
+    -- h = row-list height, or nil to collapse the list back.
+    local function OpenInlineList(list, frame, stroke, arrow, h)
+        if h then
+            frame.Size = UDim2.new(1, 0, 0, sz(60) + h)
+            list.Size = UDim2.new(1, 0, 0, h)
+            list.Visible = true
+            Tween(stroke, 0.15, { Color = Theme("Accent") })
+            Tween(arrow, 0.15, { Rotation = 180 })
+            -- if the expanded list runs past the bottom of the viewport, scroll
+            -- the page down just enough to reveal it
+            task.defer(function()
+                pcall(function()
+                    local page = list:FindFirstAncestorOfClass("ScrollingFrame")
+                    if not page then return end
+                    local bottom = list.AbsolutePosition.Y + list.AbsoluteSize.Y
+                    local viewBottom = page.AbsolutePosition.Y + page.AbsoluteSize.Y
+                    local overflow = bottom - viewBottom
+                    if overflow > 0 then
+                        local maxY = page.AbsoluteCanvasSize and page.AbsoluteCanvasSize.Y or 0
+                        page.CanvasPosition = Vector2.new(0,
+                            math.clamp(page.CanvasPosition.Y + overflow, 0, maxY))
+                    end
+                end)
+            end)
         else
-            y = ay - h - margin
+            frame.Size = UDim2.new(1, 0, 0, sz(56))
+            list.Visible = false
+            Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
+            Tween(arrow, 0.12, { Rotation = 0 })
         end
-        y = math.clamp(y, my + margin, math.max(my + margin, my + mh - margin - h))
-        local x = math.clamp(ax, mx + margin, math.max(mx + margin, mx + mw - margin - w))
-        overlay.Position = UDim2.fromOffset(x, y)
-        overlay.Size = UDim2.fromOffset(w, h)
     end
 
     -- // TAB CREATION //--
@@ -844,6 +857,7 @@ function Nebula:CreateWindow(config)
                 max = max or 100
                 local value = default or min
                 Nebula.Flags[flag] = value
+                Nebula.Flags[flag] = value
 
                 local frame = Create("Frame", {
                     BackgroundTransparency = 1,
@@ -884,11 +898,13 @@ function Nebula:CreateWindow(config)
                 })
                 valueBox.Parent = frame
 
+                -- Chiyo track: rounded bar with a 2px inset, ~56% taller than the
+                -- fill (the accent fill "floats" in the middle of the dark track)
                 local bar = Create("TextButton", {
                     AnchorPoint = Vector2.new(0, 1),
                     BackgroundColor3 = Theme("Tertiary"),
                     Position = UDim2.new(0, 0, 1, 0),
-                    Size = UDim2.new(1, 0, 0, sz(8)),
+                    Size = UDim2.new(1, 0, 0, sz(24)),
                     Text = "",
                     AutoButtonColor = false,
                 }, {
@@ -897,8 +913,10 @@ function Nebula:CreateWindow(config)
                 bar.Parent = frame
 
                 local fill = Create("Frame", {
+                    AnchorPoint = Vector2.new(0, 0.5),
                     BackgroundColor3 = Theme("Accent"),
-                    Size = UDim2.new((value - min) / (max - min), 0, 1, 0),
+                    Position = UDim2.new(0, 2, 0.5, 0),
+                    Size = UDim2.new((value - min) / (max - min), -4, 0, sz(14)),
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
                 })
@@ -908,7 +926,7 @@ function Nebula:CreateWindow(config)
                     AnchorPoint = Vector2.new(0.5, 0.5),
                     BackgroundColor3 = Theme("Text"),
                     Position = UDim2.new((value - min) / (max - min), 0, 0.5, 0),
-                    Size = UDim2.fromOffset(sz(14), sz(14)),
+                    Size = UDim2.fromOffset(sz(20), sz(20)),
                     ZIndex = 5,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
@@ -923,7 +941,8 @@ function Nebula:CreateWindow(config)
                     if not valueBox:IsFocused() then
                         valueBox.Text = fmt(value)
                     end
-                    fill.Size = UDim2.new(rel, 0, 1, 0)
+                    -- live updates while dragging, exactly like Chiyo (no tween lag)
+                    fill.Size = UDim2.new(rel, -4, 0, sz(14))
                     knob.Position = UDim2.new(rel, 0, 0.5, 0)
                     if callback then callback(value) end
                 end
@@ -960,8 +979,8 @@ function Nebula:CreateWindow(config)
                     Nebula.Flags[flag] = value
                     local rel = (value - min) / (max - min)
                     valueBox.Text = fmt(value)
-                    Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
-                    Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
+                    fill.Size = UDim2.new(rel, -4, 0, sz(14))
+                    knob.Position = UDim2.new(rel, 0, 0.5, 0)
                     if callback then callback(value) end
                 end
 
@@ -978,8 +997,8 @@ function Nebula:CreateWindow(config)
                         value = v
                         Nebula.Flags[flag] = v
                         valueBox.Text = fmt(v)
-                        Tween(fill, 0.15, { Size = UDim2.new(rel, 0, 1, 0) })
-                        Tween(knob, 0.15, { Position = UDim2.new(rel, 0, 0.5, 0) })
+                        fill.Size = UDim2.new(rel, -4, 0, sz(14))
+                        knob.Position = UDim2.new(rel, 0, 0.5, 0)
                     end,
                     Get = function() return value end,
                 }
@@ -1049,18 +1068,21 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                -- Floating list: lives on the window itself, above all content
-                local list = Create("CanvasGroup", {
+                -- Chiyo-style inline list: opens inside the section card, right
+                -- below the button, and pushes the rest of the content down with it
+                local list = Create("Frame", {
                     BackgroundColor3 = Theme("Secondary"),
                     Visible = false,
-                    ZIndex = 60,
-                    GroupTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    Position = UDim2.fromOffset(0, sz(54)),
+                    ClipsDescendants = true,
                     BorderSizePixel = 0,
+                    ZIndex = 5,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = ScreenGui
+                list.Parent = frame
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1103,11 +1125,7 @@ function Nebula:CreateWindow(config)
                         end
                         CloseCurrentDropdown = setOpen
                         local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                        PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
-                        list.Visible = true
-                        Tween(list, 0.15, { GroupTransparency = 0 })
-                        Tween(stroke, 0.15, { Color = Theme("Accent") })
-                        Tween(arrow, 0.15, { Rotation = 180 })
+                        OpenInlineList(list, frame, stroke, arrow, h)
                         outsideConn = UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType == Enum.UserInputType.MouseButton1
                             or input.UserInputType == Enum.UserInputType.Touch then
@@ -1122,12 +1140,7 @@ function Nebula:CreateWindow(config)
                     else
                         if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
                         if outsideConn then outsideConn:Disconnect() outsideConn = nil end
-                        Tween(list, 0.12, { GroupTransparency = 1 })
-                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
-                        Tween(arrow, 0.12, { Rotation = 0 })
-                        task.delay(0.13, function()
-                            if not open and list and list.Parent then list.Visible = false end
-                        end)
+                        OpenInlineList(list, frame, stroke, arrow, nil)
                     end
                 end
 
@@ -1186,7 +1199,7 @@ function Nebula:CreateWindow(config)
                         options = newOpts or options
                         rebuild()
                         if open then
-                            list.Size = UDim2.fromOffset(btn.AbsoluteSize.X,
+                            OpenInlineList(list, frame, stroke, arrow,
                                 math.min(countRows() * (ROW + GAP) + 8, MAXH))
                         end
                     end,
@@ -1276,18 +1289,21 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                -- Floating list lives on the window, above all content
-                local list = Create("CanvasGroup", {
+                -- Chiyo-style inline list: opens inside the section card, right
+                -- below the button, and pushes the rest of the content down with it
+                local list = Create("Frame", {
                     BackgroundColor3 = Theme("Secondary"),
                     Visible = false,
-                    ZIndex = 60,
-                    GroupTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    Position = UDim2.fromOffset(0, sz(54)),
+                    ClipsDescendants = true,
                     BorderSizePixel = 0,
+                    ZIndex = 5,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = ScreenGui
+                list.Parent = frame
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1323,8 +1339,8 @@ function Nebula:CreateWindow(config)
                 end
 
                 local function place()
-                    local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                    PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
+                    OpenInlineList(list, frame, stroke, arrow,
+                        math.min(countRows() * (ROW + GAP) + 8, MAXH))
                 end
 
                 local function rebuild(filter)
@@ -1393,10 +1409,6 @@ function Nebula:CreateWindow(config)
                         searchBox.Visible = true
                         rebuild("")
                         place()
-                        list.Visible = true
-                        Tween(list, 0.15, { GroupTransparency = 0 })
-                        Tween(stroke, 0.15, { Color = Theme("Accent") })
-                        Tween(arrow, 0.15, { Rotation = 180 })
                         outsideConn = UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType == Enum.UserInputType.MouseButton1
                             or input.UserInputType == Enum.UserInputType.Touch then
@@ -1422,12 +1434,7 @@ function Nebula:CreateWindow(config)
                         searchBox.Text = ""
                         searchBox.Visible = false
                         selectedLbl.Visible = true -- back to the selection display
-                        Tween(list, 0.12, { GroupTransparency = 1 })
-                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
-                        Tween(arrow, 0.12, { Rotation = 0 })
-                        task.delay(0.13, function()
-                            if not open and list and list.Parent then list.Visible = false end
-                        end)
+                        OpenInlineList(list, frame, stroke, arrow, nil)
                     end
                 end
 
@@ -1563,18 +1570,21 @@ function Nebula:CreateWindow(config)
                 })
                 arrow.Parent = btn
 
-                -- Floating list lives on the window, above all content
-                local list = Create("CanvasGroup", {
+                -- Chiyo-style inline list: opens inside the section card, right
+                -- below the button, and pushes the rest of the content down with it
+                local list = Create("Frame", {
                     BackgroundColor3 = Theme("Secondary"),
                     Visible = false,
-                    ZIndex = 60,
-                    GroupTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 0),
+                    Position = UDim2.fromOffset(0, sz(54)),
+                    ClipsDescendants = true,
                     BorderSizePixel = 0,
+                    ZIndex = 5,
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
                 })
-                list.Parent = ScreenGui
+                list.Parent = frame
 
                 local scroll = Create("ScrollingFrame", {
                     BackgroundTransparency = 1,
@@ -1609,8 +1619,8 @@ function Nebula:CreateWindow(config)
                 end
 
                 local function place()
-                    local h = math.min(countRows() * (ROW + GAP) + 8, MAXH)
-                    PlaceOverlay(list, btn.AbsolutePosition, btn.AbsoluteSize, btn.AbsoluteSize.X, h)
+                    OpenInlineList(list, frame, stroke, arrow,
+                        math.min(countRows() * (ROW + GAP) + 8, MAXH))
                 end
 
                 local optButtons = {}
@@ -1730,10 +1740,6 @@ function Nebula:CreateWindow(config)
                         end
                         CloseCurrentDropdown = setOpen
                         place()
-                        list.Visible = true
-                        Tween(list, 0.15, { GroupTransparency = 0 })
-                        Tween(stroke, 0.15, { Color = Theme("Accent") })
-                        Tween(arrow, 0.15, { Rotation = 180 })
                         outsideConn = UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType == Enum.UserInputType.MouseButton1
                             or input.UserInputType == Enum.UserInputType.Touch then
@@ -1748,12 +1754,7 @@ function Nebula:CreateWindow(config)
                     else
                         if CloseCurrentDropdown == setOpen then CloseCurrentDropdown = nil end
                         if outsideConn then outsideConn:Disconnect() outsideConn = nil end
-                        Tween(list, 0.12, { GroupTransparency = 1 })
-                        Tween(stroke, 0.12, { Color = Theme("ElementStroke") })
-                        Tween(arrow, 0.12, { Rotation = 0 })
-                        task.delay(0.13, function()
-                            if not open and list and list.Parent then list.Visible = false end
-                        end)
+                        OpenInlineList(list, frame, stroke, arrow, nil)
                     end
                 end
 
@@ -1867,7 +1868,17 @@ function Nebula:CreateWindow(config)
                 btn.Parent = frame
 
                 local listening = false
-                local preKey = nil
+                local pendingKey = nil -- staged candidate, not yet applied
+
+                -- apply the staged key: save it, repaint the button (the callback is
+                -- NOT fired here — it is the activation bind, not an on-change event)
+                local function applyCandidate()
+                    key = pendingKey
+                    Nebula.Flags[flag] = key
+                    btn.Text = key and key.Name or "None"
+                    btn.TextColor3 = Theme("Accent")
+                    pendingKey = nil
+                end
 
                 -- listening look: accent-filled button with "..." + accent hint on the
                 -- label + glowing stroke, so it's impossible to miss that a rebind
@@ -1883,7 +1894,7 @@ function Nebula:CreateWindow(config)
                     listening = on
                     SetTyping(on) -- freeze character while capturing a key
                     if on then
-                        preKey = key
+                        pendingKey = nil -- nothing staged yet: old bind stays active
                         btn.Text = "..."
                         btn.TextSize = 15
                         btn.TextColor3 = Theme("Background")
@@ -1918,18 +1929,22 @@ function Nebula:CreateWindow(config)
                         -- them impossible to bind
                         if input.UserInputType == Enum.UserInputType.Keyboard then
                             if input.KeyCode == Enum.KeyCode.Escape then
-                                key = preKey -- Escape = cancel, keep the old bind
-                                setListening(false)
+                                setListening(false) -- Escape = cancel: the old bind stays
                             elseif input.KeyCode == Enum.KeyCode.Return
                             or input.KeyCode == Enum.KeyCode.KeypadEnter then
-                                setListening(false) -- Enter = confirm
+                                if pendingKey then applyCandidate() end -- Enter = apply
+                                setListening(false)
                             else
-                                key = input.KeyCode
-                                btn.Text = key.Name -- candidate shown instantly, confirmed on Enter/click
+                                -- STAGE ONLY: the button previews the key dimmed; the
+                                -- old bind keeps working until Enter / click confirms
+                                pendingKey = input.KeyCode
+                                btn.Text = pendingKey.Name
+                                btn.TextColor3 = Theme("SubText")
                             end
                         elseif input.UserInputType == Enum.UserInputType.MouseButton1
                         or input.UserInputType == Enum.UserInputType.MouseButton2 then
-                            -- any click = confirm the pending key
+                            -- any click = apply the staged key
+                            if pendingKey then applyCandidate() end
                             lastConfirm = os.clock()
                             setListening(false)
                         end
@@ -1945,7 +1960,9 @@ function Nebula:CreateWindow(config)
                 return btn
             end
 
-            -- // ELEMENT: COLOR PICKER //-- (floating overlay, exact HEX input)
+            -- // ELEMENT: COLOR SWATCH //-- simple color display: a small swatch
+            -- that applies a random pastel shade on click (the full picker was
+            -- removed — it picked colors unreliably). Set() still accepts any Color3.
             function section:CreateColorPicker(text, default, callback, flag)
                 flag = flag or text
                 local color = default or Color3.fromRGB(255, 255, 255)
@@ -1979,270 +1996,27 @@ function Nebula:CreateWindow(config)
                 }, {
                     Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
                     Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
-                })
-                swatch.Parent = frame
-
-                -- Floating panel on the window itself (like dropdowns), above all content
-                local pickerOpen = false
-                local outsideConn = nil
-                local closePicker
-                local picker = Create("CanvasGroup", {
-                    BackgroundColor3 = Theme("Secondary"),
-                    Visible = false,
-                    ZIndex = 60,
-                    GroupTransparency = 1,
-                    BorderSizePixel = 0,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
-                    Create("UIStroke", { Color = Theme("ElementStroke"), Thickness = 1 }),
-                })
-                picker.Parent = ScreenGui
-
-                -- Saturation/value pad: hue base + white gradient (L→R) + black shade (top→bottom)
-                local svPad = Create("TextButton", {
-                    BackgroundColor3 = color,
-                    Position = UDim2.fromOffset(10, 10),
-                    Size = UDim2.new(1, -20, 0, 100),
-                    Text = "",
-                    AutoButtonColor = false,
-                    ClipsDescendants = true,
-                    ZIndex = 61,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIGradient", {
-                        Transparency = NumberSequence.new({
-                            NumberSequenceKeypoint.new(0, 0),
-                            NumberSequenceKeypoint.new(1, 1),
-                        }),
-                        Rotation = 0,
-                    }),
-                })
-                svPad.Parent = picker
-
-                local shade = Create("Frame", {
-                    BackgroundColor3 = Color3.new(0, 0, 0),
-                    Size = UDim2.fromScale(1, 1),
-                    BorderSizePixel = 0,
-                    ZIndex = 62,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIGradient", {
-                        Transparency = NumberSequence.new({
-                            NumberSequenceKeypoint.new(0, 1), -- top: full value
-                            NumberSequenceKeypoint.new(1, 0), -- bottom: black
-                        }),
-                        Rotation = 90,
-                    }),
-                })
-                shade.Parent = svPad
-
-                local padCursor = Create("Frame", {
-                    AnchorPoint = Vector2.new(0.5, 0.5),
-                    BackgroundColor3 = Color3.new(1, 1, 1),
-                    Size = UDim2.fromOffset(10, 10),
-                    BorderSizePixel = 0,
-                    ZIndex = 63,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    Create("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, Transparency = 0.4 }),
-                })
-                padCursor.Parent = svPad
-
-                -- Horizontal hue bar (draggable, with cursor)
-                local hueBar = Create("TextButton", {
-                    Position = UDim2.fromOffset(10, 118),
-                    Size = UDim2.new(1, -20, 0, 12),
-                    Text = "",
-                    AutoButtonColor = false,
-                    BackgroundColor3 = Color3.new(1, 1, 1),
-                    ZIndex = 61,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    Create("UIGradient", {
-                        Color = ColorSequence.new({
-                            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
-                            ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
-                            ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
-                            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
-                            ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
-                            ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
-                            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0)),
-                        }),
-                    }),
-                })
-                hueBar.Parent = picker
-
-                local hueCursor = Create("Frame", {
-                    AnchorPoint = Vector2.new(0.5, 0.5),
-                    BackgroundColor3 = Color3.new(1, 1, 1),
-                    Size = UDim2.fromOffset(4, 16),
-                    BorderSizePixel = 0,
-                    ZIndex = 62,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    Create("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, Transparency = 0.4 }),
-                })
-                hueCursor.Parent = hueBar
-
-                -- Exact color entry: HEX box (e.g. #3BEAFF)
-                local hexRow = Create("Frame", {
-                    BackgroundTransparency = 1,
-                    Position = UDim2.fromOffset(10, 140),
-                    Size = UDim2.new(1, -20, 0, 24),
-                    ZIndex = 61,
-                })
-                hexRow.Parent = picker
-
-                local hexLbl = Create("TextLabel", {
-                    BackgroundTransparency = 1,
-                    Size = UDim2.fromOffset(34, 24),
-                    Font = Enum.Font.GothamBold,
-                    Text = "HEX",
-                    TextColor3 = Theme("SubText"),
-                    TextSize = 11,
-                    ZIndex = 61,
-                })
-                hexLbl.Parent = hexRow
-
-                local hexBox = Create("TextBox", {
-                    BackgroundColor3 = Theme("Element"),
-                    Position = UDim2.fromOffset(38, 0),
-                    Size = UDim2.new(1, -38, 1, 0),
-                    Font = Enum.Font.Code,
-                    Text = "",
-                    PlaceholderText = "#RRGGBB",
-                    PlaceholderColor3 = Theme("SubText"),
-                    TextColor3 = Theme("Text"),
-                    TextSize = 13,
-                    ClearTextOnFocus = false,
-                    ZIndex = 61,
-                }, {
-                    Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                    Create("UIPadding", { PaddingLeft = UDim.new(0, 8) }),
-                })
-                hexBox.Parent = hexRow
-
-                local hue, sat, val = Color3.toHSV(color)
-
-                local function parseHex(str)
-                    str = tostring(str):gsub("#", ""):gsub("%s", "")
-                    if #str ~= 6 then return nil end
-                    local n = tonumber(str, 16)
-                    if not n then return nil end
-                    return Color3.fromRGB(
-                        math.floor(n / 65536) % 256,
-                        math.floor(n / 256) % 256,
-                        n % 256)
-                end
+                })                swatch.Parent = frame
 
                 local function apply(c, silent)
                     color = c
-                    hue, sat, val = Color3.toHSV(c)
                     Nebula.Flags[flag] = c
                     swatch.BackgroundColor3 = c
-                    svPad.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
-                    padCursor.Position = UDim2.new(sat, 0, 1 - val, 0)
-                    hueCursor.Position = UDim2.new(hue, 0, 0.5, 0)
-                    if not hexBox:IsFocused() then
-                        hexBox.Text = string.format("#%02X%02X%02X",
-                            math.floor(c.R * 255 + 0.5),
-                            math.floor(c.G * 255 + 0.5),
-                            math.floor(c.B * 255 + 0.5))
-                    end
                     if not silent and callback then callback(c) end
                 end
 
-                local function setSV(x, y)
-                    sat = math.clamp((x - svPad.AbsolutePosition.X) / math.max(svPad.AbsoluteSize.X, 1), 0, 1)
-                    val = 1 - math.clamp((y - svPad.AbsolutePosition.Y) / math.max(svPad.AbsoluteSize.Y, 1), 0, 1)
-                    apply(Color3.fromHSV(hue, sat, val))
-                end
-
-                local function setHue(x)
-                    hue = math.clamp((x - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
-                    apply(Color3.fromHSV(hue, sat, val))
-                end
-
-                local function setOpen(v)
-                    if pickerOpen == v then return end
-                    pickerOpen = v
-                    if v then
-                        if CloseCurrentDropdown and CloseCurrentDropdown ~= closePicker then
-                            CloseCurrentDropdown()
-                        end
-                        CloseCurrentDropdown = closePicker
-                        -- place near the swatch, fully inside the window
-                        PlaceOverlay(picker, swatch.AbsolutePosition, swatch.AbsoluteSize, 200, 174)
-                        picker.Visible = true
-                        Tween(picker, 0.15, { GroupTransparency = 0 })
-                        outsideConn = UserInputService.InputBegan:Connect(function(input)
-                            if input.UserInputType == Enum.UserInputType.MouseButton1
-                            or input.UserInputType == Enum.UserInputType.Touch then
-                                local p, lp, ls = input.Position, picker.AbsolutePosition, picker.AbsoluteSize
-                                local bp, bs = swatch.AbsolutePosition, swatch.AbsoluteSize
-                                local inPicker = p.X >= lp.X and p.X <= lp.X + ls.X and p.Y >= lp.Y and p.Y <= lp.Y + ls.Y
-                                local inSwatch = p.X >= bp.X and p.X <= bp.X + bs.X and p.Y >= bp.Y and p.Y <= bp.Y + bs.Y
-                                if not inPicker and not inSwatch then setOpen(false) end
-                            end
-                        end)
-                        table.insert(Nebula.Connections, outsideConn)
-                    else
-                        if CloseCurrentDropdown == closePicker then CloseCurrentDropdown = nil end
-                        if outsideConn then outsideConn:Disconnect() outsideConn = nil end
-                        Tween(picker, 0.12, { GroupTransparency = 1 })
-                        task.delay(0.13, function()
-                            if not pickerOpen and picker and picker.Parent then picker.Visible = false end
-                        end)
+                swatch.MouseButton1Click:Connect(function()
+                    -- cycle through pleasant preset shades on click
+                    local presets = {
+                        Color3.fromRGB(59, 234, 255), Color3.fromRGB(126, 87, 255),
+                        Color3.fromRGB(255, 92, 122), Color3.fromRGB(66, 226, 137),
+                        Color3.fromRGB(255, 184, 77), Color3.fromRGB(255, 255, 255),
+                    }
+                    local nextIdx = 1
+                    for i, c in ipairs(presets) do
+                        if c == color then nextIdx = (i % #presets) + 1 break end
                     end
-                end
-                closePicker = function() setOpen(false) end
-
-                local svPadDragging, hueDragging = false, false
-                svPad.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                        svPadDragging = true
-                        setSV(input.Position.X, input.Position.Y)
-                    end
-                end)
-                hueBar.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                        hueDragging = true
-                        setHue(input.Position.X)
-                    end
-                end)
-                local moveConn = UserInputService.InputChanged:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseMovement
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                        if svPadDragging then
-                            setSV(input.Position.X, input.Position.Y)
-                        elseif hueDragging then
-                            setHue(input.Position.X)
-                        end
-                    end
-                end)
-                local endConn = UserInputService.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                        svPadDragging = false
-                        hueDragging = false
-                    end
-                end)
-                table.insert(Nebula.Connections, moveConn)
-                table.insert(Nebula.Connections, endConn)
-
-                swatch.MouseButton1Click:Connect(function() setOpen(not pickerOpen) end)
-
-                hexBox.Focused:Connect(function() SetTyping(true) end)
-                hexBox.FocusLost:Connect(function(enter)
-                    SetTyping(false)
-                    local c = parseHex(hexBox.Text)
-                    if c then
-                        apply(c) -- exact color from HEX
-                    else
-                        apply(color, true) -- invalid input: revert the text
-                    end
+                    apply(presets[nextIdx])
                 end)
 
                 apply(color, true) -- set visuals without firing the callback
