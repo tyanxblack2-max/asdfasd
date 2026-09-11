@@ -285,7 +285,9 @@ function Nebula:CreateWindow(config)
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(self.Width, self.Height),
         Active = true,
-        ClipsDescendants = true, -- sidebar/footer must never spill outside the window
+        -- NO ClipsDescendants here: the UIStroke border renders half outside the
+        -- frame's bounds, so frame clipping would cut off the outer half of the
+        -- border. Content itself is clipped by the Content frame instead.
     }, {
         Create("UICorner", { CornerRadius = UDim.new(0, 10) }),
         Create("UIStroke", { Name = "Stroke", Color = Theme("ElementStroke"), Thickness = 1.5, Transparency = 0 }),
@@ -522,7 +524,7 @@ function Nebula:CreateWindow(config)
         Text = "discord.gg/liquidhub  |  <b>Liquid Hub " .. LIB_VERSION .. "</b>",
         TextColor3 = Theme("SubText"),
         TextSize = 12,
-        TextXAlignment = Enum.TextXAlignment.Right,
+        TextXAlignment = Enum.TextXAlignment.Center,
     })
     Footer.Parent = Main
 
