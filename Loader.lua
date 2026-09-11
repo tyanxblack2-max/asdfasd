@@ -1,5 +1,5 @@
 --[[───────────────────────────────────────────────────────────────
-    💧 LIQUID HUB — loader v2.2 (self-diagnosing)
+    💧 LIQUID HUB — loader v2.3 (self-diagnosing)
 
     What changed vs v2.1:
       • waits for the player to exist (running too early killed everything)
@@ -9,7 +9,7 @@
         red on-screen box with the exact error — no more silent nothing
 ───────────────────────────────────────────────────────────────]]
 
-local VERSION = "v2.2"
+local VERSION = "v2.3"
 local SOURCES = {
     "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/Source.lua",
     "https://cdn.jsdelivr.net/gh/tyanxblack2-max/asdfasd@main/Source.lua",
