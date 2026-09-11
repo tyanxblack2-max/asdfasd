@@ -504,11 +504,18 @@ function Nebula:CreateWindow(config)
 
     local TabHolder = Create("ScrollingFrame", {
         BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(8, 8),
-        Size = UDim2.new(1, -16, 1, -16),
+        -- extra room around the tab rows so their border strokes never touch
+        -- the holder edge (a stroke renders half outside the button and gets
+        -- shaved off when it lands exactly on a clipping boundary)
+        Position = UDim2.fromOffset(4, 6),
+        Size = UDim2.new(1, -8, 1, -12),
         CanvasSize = UDim2.new(),
         ScrollBarThickness = 0,
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        -- ScrollingFrames CLIP by default, which cut the outer half of the tab
+        -- button strokes off. Tab rows never overflow this holder anyway, so
+        -- clipping only ever did harm here.
+        ClipsDescendants = false,
     }, {
         Create("UIListLayout", {
             FillDirection = Enum.FillDirection.Vertical,
@@ -601,7 +608,9 @@ function Nebula:CreateWindow(config)
         local btn = Create("TextButton", {
             BackgroundColor3 = Theme("Tertiary"),
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, -16, 0, sz(32)),
+            -- slightly narrower than the holder: leaves a clear gap on the right
+            -- so the selected tab's accent stroke has room to render in full
+            Size = UDim2.new(1, -12, 0, sz(32)),
             Font = Enum.Font.GothamBold,
             Text = (icon or name:sub(1, 1)) .. "  " .. name:upper(),
             TextColor3 = Theme("SubText"),
@@ -2167,13 +2176,18 @@ function Nebula:CreateWindow(config)
         end)
         task.delay(duration, function()
             local idx = table.find(activeNotifs, notifGui)
-            if idx then table.remove(activeNotifs, idx) end
+            if idx then
+                table.remove(activeNotifs, idx)
+                -- re-flow the stack NOW, in parallel with the slide-out: the
+                -- remaining toasts glide down while this one slides away instead
+                -- of jerking down only after the slide-out finishes
+                repositionNotifs()
+            end
             if notifGui and notifGui.Parent then
                 Tween(notifGui, 0.3, { Position = UDim2.new(1, 300, 1, -20) })
                 task.wait(0.3)
                 notifGui:Destroy()
             end
-            repositionNotifs()
         end)
     end
 
