@@ -1,0 +1,250 @@
+-- Universal Hub Loader | supports multiple games | Delta Plugin fix included
+-- Key system gate: provider selection (Work.ink / Linkvertise) + HWID binding + session cache
+-- Supported: Final Swarm, Chess Incremental, Sticks Incremental 2
+
+local KEY_SYSTEM_URL = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/KeySystemUI.luau"
+local LOCAL_KEY_UI = "LiquidHub/KeySystemUI.luau" -- optional local cache on disk (auto-written after first successful load)
+
+local REPO = "https://raw.githubusercontent.com/tyanxblack2-max/asdfasd/refs/heads/main/"
+
+-- Always-visible on-screen status card. "Nothing appears" is no longer possible:
+-- any failure (unsupported game, load error, key system down) shows up on screen.
+local function showFatal(title, text)
+	pcall(function()
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "LiquidHub_LoaderStatus"
+		gui.ResetOnSpawn = false
+		gui.DisplayOrder = 1000
+		local parented = false
+		pcall(function()
+			if gethui then
+				gui.Parent = gethui()
+				parented = true
+			end
+		end)
+		if not parented then
+			gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+		end
+		local card = Instance.new("Frame")
+		card.AnchorPoint = Vector2.new(0.5, 1)
+		card.Position = UDim2.new(0.5, 0, 1, -40)
+		card.Size = UDim2.fromOffset(400, 88)
+		card.BackgroundColor3 = Color3.fromRGB(17, 17, 23)
+		card.BorderSizePixel = 0
+		card.Parent = gui
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 10)
+		corner.Parent = card
+		local t1 = Instance.new("TextLabel")
+		t1.Size = UDim2.new(1, -20, 0, 24)
+		t1.Position = UDim2.new(0, 10, 0, 8)
+		t1.BackgroundTransparency = 1
+		t1.Font = Enum.Font.GothamBold
+		t1.TextSize = 15
+		t1.TextColor3 = Color3.fromRGB(255, 130, 90)
+		t1.Text = title
+		t1.Parent = card
+		local t2 = Instance.new("TextLabel")
+		t2.Size = UDim2.new(1, -20, 1, -40)
+		t2.Position = UDim2.new(0, 10, 0, 34)
+		t2.BackgroundTransparency = 1
+		t2.Font = Enum.Font.Gotham
+		t2.TextSize = 12
+		t2.TextWrapped = true
+		t2.TextColor3 = Color3.fromRGB(210, 210, 220)
+		t2.Text = text
+		t2.Parent = card
+		task.delay(12, function()
+			pcall(function()
+				gui:Destroy()
+			end)
+		end)
+	end)
+	warn("[Liquid Hub TEST] " .. title .. ": " .. text)
+end
+
+local SUPPORTED = {
+	-- Final Swarm
+	[99521272836282] = REPO .. "Final%20Swarm.luau", -- Final Swarm main
+	[797875825749] = REPO .. "Final%20Swarm.luau", -- Final Swarm Raid
+	[9551044479] = REPO .. "Final%20Swarm.luau", -- Final Swarm Universe
+
+	-- Chess Incremental
+	[72119929635167] = REPO .. "ChessInc_.luau", -- Chess Incremental Place
+	[10381920426] = REPO .. "ChessInc_.luau", -- Chess Incremental Game
+
+	-- Sticks Incremental 2 (ids reported in-game via the loader's error card)
+	[106474014920113] = REPO .. "Sticks%20Inc%202_.luau", -- Sticks Incremental 2 (main place)
+	[10742439589] = REPO .. "Sticks%20Inc%202_.luau", -- Sticks Incremental 2 (universe id)
+}
+
+local STICKS_URL = REPO .. "Sticks%20Inc%202_.luau" -- name-based fallback (covers renamed/alt places)
+
+local function withPlugin(fn)
+	local get = getthreadidentity or get_thread_identity or function() return 8 end
+	local set = setthreadidentity or set_thread_identity or setthreadcontext or set_identity
+	local old = get and get() or 8
+	if set then pcall(set, 8) end
+	local ok, res = pcall(fn)
+	if set then pcall(set, old) end
+	if not ok then error(res) end
+	return res
+end
+
+withPlugin(function()
+	local pid = game.PlaceId
+	local gid = game.GameId
+
+	print("[Liquid Hub TEST] Loader v1.1 (name-first routing) | PlaceId=" .. tostring(pid) .. " | GameId=" .. tostring(gid) .. " | Name=" .. tostring(game.Name))
+
+	--// ================= ANALYTICS PING =================
+	-- Fire-and-forget usage beacon; never blocks or breaks the loader.
+	local BACKEND_BASE = "https://liquid-hub-api.sempaireal.workers.dev"
+	local function trackEvent(kind)
+		task.spawn(function()
+			pcall(function()
+				local hs = game:GetService("HttpService")
+				if syn and syn.request then
+					syn.request({ Url = BACKEND_BASE .. "/api/track?kind=" .. kind .. "&game=" .. hs:UrlEncode(game.Name), Method = "GET" })
+				elseif http_request then
+					http_request({ Url = BACKEND_BASE .. "/api/track?kind=" .. kind .. "&game=" .. hs:UrlEncode(game.Name), Method = "GET" })
+				elseif request then
+					request({ Url = BACKEND_BASE .. "/api/track?kind=" .. kind .. "&game=" .. hs:UrlEncode(game.Name), Method = "GET" })
+				else
+					game:HttpGet(BACKEND_BASE .. "/api/track?kind=" .. kind .. "&game=" .. hs:UrlEncode(game.Name), true)
+				end
+			end)
+		end)
+	end
+	trackEvent("loader_start")
+
+	-- Name rules run FIRST: game names survive place updates, IDs don't.
+	-- ("[UPD1] Chess Incremental" still contains "chess incremental"; a new
+	-- place id would miss the table and fall through to detection.)
+	local NAME_RULES = {
+		{ pattern = "swarm", url = SUPPORTED[99521272836282] },
+		{ pattern = "chess incremental", url = SUPPORTED[72119929635167] },
+		{ pattern = "chess", url = SUPPORTED[72119929635167] },
+		{ pattern = "sticks incremental", url = STICKS_URL },
+		{ pattern = "sticks", url = STICKS_URL },
+	}
+	local function matchName(n)
+		n = (n or ""):lower()
+		for _, r in ipairs(NAME_RULES) do
+			if n:find(r.pattern, 1, true) then return r.url end
+		end
+		return nil
+	end
+
+	local url = SUPPORTED[pid] or SUPPORTED[gid] or matchName(game.Name)
+	print("[Liquid Hub TEST] Detection: " .. (SUPPORTED[pid] and "PlaceId table" or SUPPORTED[gid] and "GameId table" or matchName(game.Name) and "name match" or "fallback/API"))
+
+	-- Renamed/rebranded place: resolve the CANONICAL game name from Roblox's
+	-- web API and match on that before giving up (canonical name is stable
+	-- even when the display name gets prefix-spammed with [UPD1] etc).
+	if not url and pid and pid ~= 0 then
+		local okApi, resolved = pcall(function()
+			local Http = game:GetService("HttpService")
+			local res = game:HttpGet("https://apis.roblox.com/universes/v1/places/" .. pid .. "/universe", true)
+			local uid = Http:JSONDecode(res).universeId
+			local res2 = game:HttpGet("https://games.roblox.com/v1/games?universeIds=" .. tostring(uid), true)
+			return Http:JSONDecode(res2).data[1].name
+		end)
+		if okApi and type(resolved) == "string" then
+			url = matchName(resolved)
+		end
+	end
+
+	-- LAST RESORT structural check: ONLY Final Swarm-specific markers (raid
+	-- enemies). The old generic "Map.Floor > 1000" check is REMOVED - it
+	-- matched other games' maps (a chess board!) and served the wrong script.
+	if not url and workspace:FindFirstChild("Enemies") then
+		local ok, hasRaid = pcall(function()
+			for _, e in ipairs(workspace.Enemies:GetChildren()) do
+				if e.Name:lower():find("raid") or e.Name:lower():find("tomb") then
+					return true
+				end
+			end
+			return false
+		end)
+		if ok and hasRaid then
+			url = SUPPORTED[99521272836282]
+		end
+	end
+
+	if not url then
+		showFatal(
+			"Game not supported",
+			"PlaceId=" .. tostring(pid) .. " | GameId=" .. tostring(gid) .. " | Name=" .. tostring(game.Name) .. " - send this to the developer"
+		)
+		return
+	end
+
+	--// ================= KEY SYSTEM GATE =================
+	-- Key UI loads REMOTE-FIRST so updates go live instantly; local cache is only an offline fallback.
+
+	local function loadKeySystemUI()
+		-- 1) GitHub (always fresh)
+		local source = nil
+		local okRemote, remote = pcall(function()
+			source = game:HttpGet(KEY_SYSTEM_URL, true)
+			return loadstring(source)()
+		end)
+		if okRemote and remote then
+			-- cache for offline fallback
+			pcall(function()
+				if writefile then
+					if isfolder and not isfolder("LiquidHub") then
+						makefolder("LiquidHub")
+					end
+					writefile(LOCAL_KEY_UI, source)
+				end
+			end)
+			return remote
+		end
+
+		-- 2) Local cache (only if GitHub is unreachable)
+		local okLocal, localMod = pcall(function()
+			if readfile and isfile and isfile(LOCAL_KEY_UI) then
+				local fn = loadstring(readfile(LOCAL_KEY_UI))
+				if fn then
+					return fn()
+				end
+			end
+			error("no local copy")
+		end)
+		if okLocal and localMod then
+			return localMod
+		end
+
+		warn("[Universal Loader] Key system UI failed to load: " .. tostring(remote))
+		showFatal(
+			"Key system failed to load",
+			"Check your internet and re-inject. If it keeps failing, tell the developer: " .. tostring(remote)
+		)
+		return nil
+	end
+
+	local KeySystemUI = loadKeySystemUI()
+
+	local function startHub(sessionToken)
+		getgenv().LiquidHubSession = sessionToken
+		trackEvent("hub_load")
+		local ok, err = pcall(function()
+			loadstring(game:HttpGet(url, true))()
+		end)
+		if not ok then
+			warn("[Universal Loader] Failed to load hub: " .. tostring(err))
+		end
+	end
+
+	if KeySystemUI and KeySystemUI.Run then
+		local ok, err = pcall(KeySystemUI.Run, startHub)
+		if not ok then
+			showFatal("Key system error", tostring(err))
+		end
+	else
+		-- FAIL CLOSED: no key UI = no hub. Never bypass the key system.
+		showFatal("Key system unavailable", "The key UI could not be loaded - hub stays locked. Re-inject and try again.")
+	end
+end)
