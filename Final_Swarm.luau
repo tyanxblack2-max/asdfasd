@@ -117,19 +117,23 @@ if RS:GetAttribute("TPL_NoclipOn")==nil then RS:SetAttribute("TPL_NoclipOn", fal
 
 if RS:GetAttribute("TPL_HideNameOn")==nil then RS:SetAttribute("TPL_HideNameOn", false) end
 
+if RS:GetAttribute("TPL_AutoEnterPortalOn")==nil then RS:SetAttribute("TPL_AutoEnterPortalOn", false) end
+
+if RS:GetAttribute("TPL_PortalTargetMult")==nil then RS:SetAttribute("TPL_PortalTargetMult", 3) end
+
+-- one-time migration: Farm Mode was renamed "Auto-Dodge (Hover)" -> "Auto-Dodge"
+if RS:GetAttribute("TPL_FarmMode") == "Auto-Dodge (Hover)" then RS:SetAttribute("TPL_FarmMode", "Auto-Dodge") end
+-- Orbit Center is the default farm mode: set it only when the attribute was
+-- never saved (nil) so an explicit "Auto-Dodge" pick is never overwritten
+if RS:GetAttribute("TPL_FarmMode") == nil then RS:SetAttribute("TPL_FarmMode", "Orbit Center") end
+
 local function isPaused() return false end
-
-
 
 -- Shared resume table: systems wrapped in do-blocks (chunk-register slimming,
 -- the executor caps chunk locals at 200) publish their loop starters here
 -- instead of leaking locals to the end of the chunk.
 
 local Resume = {}
-
-
-
-
 
 -- Clean up any leftover UI from previous versions
 
@@ -144,8 +148,6 @@ pcall(function()
 	if rg and rg:FindFirstChild("Luna-Old") then rg["Luna-Old"]:Destroy() end
 
 end)
-
-
 
 -- Destroy any previous hub window (Nebula/WindUI/Rayfield create a fresh ScreenGui
 -- each time). Without this every reload stacks another window on top of the old
@@ -199,11 +201,39 @@ pcall(function()
 
 end)
 
-
+-- ===================== ANTICHEAT BYPASS =====================
+-- AntiCheatServiceClient watches WalkSpeed/JumpHeight/HipHeight/PlatformStand/
+-- humanoid state/CanCollide and destroys non-whitelisted BodyMovers, reporting
+-- everything through Networker("AntiCheat"):fire("ReportViolation", name).
+-- Wrap that channel once: eat violations, pass ClientHeartbeat (heartbeat
+-- timeout still kicks server-side, so it must stay alive).
+-- Also tag our own BodyMovers with the game's own whitelist attribute
+-- (Configs.GameVFXAttribute) so the AC's DescendantAdded destroyer skips them.
+do
+	pcall(function()
+		local AC = require(RS.Shared.Services.AntiCheatService.AntiCheatServiceClient)
+		if type(AC) == "table" and AC._networker and not AC._networker.__fsPatched then
+			local realFire = AC._networker.fire
+			AC._networker.fire = function(self, msg, ...)
+				if msg == "ReportViolation" then return end
+				return realFire(self, msg, ...)
+			end
+			AC._networker.__fsPatched = true
+		end
+	end)
+end
+local FS_AC_WHITELIST_ATTR = "GameOwnedVFX"
+local function fsWhitelist(inst)
+	pcall(function() inst:SetAttribute(FS_AC_WHITELIST_ATTR, true) end)
+	return inst
+end
 
 -- ===================== LIBRARY LOAD (Nebula / Liquid Hub) =====================
 
--- Same sources the Liquid Hub loader uses (raw + jsDelivr mirror, cache-busting).
+-- Same sources the Liquid Hub loader uses (raw + jsDelivr). Speed: the lib is
+-- cached to disk after the first fetch, so later starts load instantly with no
+-- HTTP round trip; the network is only touched when the cache is missing or
+-- the cached copy fails to compile.
 
 local LIB_SOURCES = {
 
@@ -213,35 +243,81 @@ local LIB_SOURCES = {
 
 }
 
+local LIB_CACHE = "UITemplate/lib_cache.luau"
+
 local Liquid = nil
 
-for _, url in ipairs(LIB_SOURCES) do
+local function compileLib(res)
 
-	local ok, res = pcall(function()
+	if type(res) ~= "string" or #res <= 2000 then return nil end
 
-		return game:HttpGet(url .. "?nocache=" .. tostring(os.time()))
+	local chunk, cerr = (loadstring or load)(res)
 
-	end)
+	if not chunk then
 
-	if ok and type(res) == "string" and #res > 2000 then
+		warn("[UI-Template] Compile error: " .. tostring(cerr))
 
-		local chunk, cerr = (loadstring or load)(res)
+		return nil
 
-		if chunk then
+	end
 
-			local okLib, lib = pcall(chunk)
+	local okLib, lib = pcall(chunk)
 
-			if okLib and type(lib) == "table" then
+	if okLib and type(lib) == "table" then return lib end
 
-				Liquid = lib
+	return nil
+
+end
+
+local canCacheLib = typeof(readfile) == "function" and typeof(writefile) == "function"
+
+	and typeof(isfile) == "function" and typeof(isfolder) == "function"
+
+if canCacheLib and isfile(LIB_CACHE) then
+
+	local okR, cached = pcall(readfile, LIB_CACHE)
+
+	if okR then
+
+		Liquid = compileLib(cached)
+
+		if not Liquid then pcall(function() delfile(LIB_CACHE) end) end
+
+	end
+
+end
+
+if not Liquid then
+
+	for _, url in ipairs(LIB_SOURCES) do
+
+		local ok, res = pcall(function()
+
+			return game:HttpGet(url)
+
+		end)
+
+		if ok then
+
+			Liquid = compileLib(res)
+
+			if Liquid then
+
+				if canCacheLib then
+
+					pcall(function()
+
+						if not isfolder("UITemplate") then makefolder("UITemplate") end
+
+						writefile(LIB_CACHE, res)
+
+					end)
+
+				end
 
 				break
 
 			end
-
-		else
-
-			warn("[UI-Template] Compile error: " .. tostring(cerr))
 
 		end
 
@@ -259,36 +335,59 @@ if not Liquid then
 
 end
 
-
+-- forward decl: the async game-name resolver patches this Credits label
+-- (must be declared BEFORE the resolver below captures it as a global)
+creditsTeamGameLabel = nil
 
 -- ===================== GAME DETECTION =====================
--- Resolve the current game's display name BEFORE the window is created, so it
--- can go straight into the title bar. Priority: Roblox web API ->
--- ReplicatedStorage attributes -> Place <id>.
-local GAME_NAME = "Unknown Game"
+-- Resolved ASYNC after the window exists so script startup never blocks on
+-- HTTP: a placeholder goes into the title bar instantly, and the real name
+-- patches the title once the web API answers. (Priority once resolved:
+-- Roblox web API -> ReplicatedStorage attributes -> Place <id>.)
+local GAME_NAME = "Final Swarm"
 do
 	local pid = game.PlaceId
-	local ok, name = pcall(function()
-		local Http = game:GetService("HttpService")
-		local res = game:HttpGet("https://apis.roblox.com/universes/v1/places/" .. pid .. "/universe")
-		local universeId = Http:JSONDecode(res).universeId
-		local res2 = game:HttpGet("https://games.roblox.com/v1/games?universeIds=" .. universeId)
-		return Http:JSONDecode(res2).data[1].name
-	end)
+	task.spawn(function()
+		local resolved = nil
+		local ok, name = pcall(function()
+			local Http = game:GetService("HttpService")
+			local res = game:HttpGet("https://apis.roblox.com/universes/v1/places/" .. pid .. "/universe")
+			local universeId = Http:JSONDecode(res).universeId
+			local res2 = game:HttpGet("https://games.roblox.com/v1/games?universeIds=" .. universeId)
+			return Http:JSONDecode(res2).data[1].name
+		end)
 	if ok and type(name) == "string" and #name > 0 then
-		GAME_NAME = name
+		resolved = name
 	else
 		pcall(function()
 			local rs = game:GetService("ReplicatedStorage")
 			for _, attr in ipairs({ "GameName", "PlaceName", "DisplayName" }) do
 				local v = rs:GetAttribute(attr)
-				if type(v) == "string" and #v > 0 then GAME_NAME = v break end
+				if type(v) == "string" and #v > 0 then resolved = v break end
 			end
 		end)
-		if GAME_NAME == "Unknown Game" and pid ~= 0 then
-			GAME_NAME = "Place " .. pid
+		if not resolved and pid ~= 0 then
+			resolved = "Place " .. pid
 		end
 	end
+	if not resolved then return end
+	GAME_NAME = resolved
+	pcall(function()
+		-- patch the title bar text live (same rich-text shape the lib builds;
+		-- the title TextLabel is the first one parented to TitleBar)
+		local gui = (gethui and gethui() or game:GetService("CoreGui")):FindFirstChild("NebulaUI")
+		local titleBar = gui and gui:FindFirstChild("Main") and gui.Main:FindFirstChild("TitleBar")
+		local title = titleBar and titleBar:FindFirstChildOfClass("TextLabel")
+		if title then
+			title.Text = "💧  Liquid Hub  <font color=\"#3beaff\">|</font>  v2.3"
+				.. "  <font color=\"#8c8c9b\">•  " .. GAME_NAME .. "</font>"
+		end
+	end)
+	pcall(function()
+		local lbl = creditsTeamGameLabel and creditsTeamGameLabel()
+		if lbl then lbl.Text = "Game: " .. GAME_NAME end
+	end)
+	end)
 end
 
 local WindowRaw = Liquid:CreateWindow({
@@ -305,17 +404,24 @@ local WindowRaw = Liquid:CreateWindow({
 
 	Height    = 440,
 
+	-- "Auto Minimize on Start" (Configs tab): persisted in its own file so it
+	-- applies BEFORE the window builds — the pop-in is skipped entirely.
+	StartMinimized = (function()
+		local ok, v = pcall(function()
+			if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return false end
+			if not isfile("UITemplate/startmin.txt") then return false end
+			return readfile("UITemplate/startmin.txt") == "1"
+		end)
+		return ok and v or false
+	end)(),
+
 })
-
-
 
 -- Config registry: adaptSection records every Toggle/Slider/Dropdown (name -> element
 -- + last value + applier) so the Configs tab can save/apply whole setups.
 -- Elements with noreg = true (meta UI) are skipped.
 
 local Reg = {}
-
-
 
 -- Old-template -> Nebula adapter: весь фарм-код ниже продолжает звать
 -- tab:CreateToggle / CreateSlider / CreateDropdown / CreateSection / CreateButton / CreateStat
@@ -339,8 +445,6 @@ local function adaptSection(sect)
 	function s:CreateLabel(o)
 		return sect:CreateLabel(type(o) == "table" and o.name or o)
 	end
-
-
 
 	function s:CreateToggle(o)
 
@@ -373,8 +477,6 @@ local function adaptSection(sect)
 		return obj
 
 	end
-
-
 
 	function s:CreateSlider(o)
 
@@ -417,8 +519,6 @@ local function adaptSection(sect)
 		return obj
 
 	end
-
-
 
 	function s:CreateDropdown(o)
 
@@ -574,8 +674,6 @@ local function adaptSection(sect)
 
 	end
 
-
-
 	function s:CreateSection(o)
 
 		-- Nebula nests sections under tabs, not under sections; a nested call
@@ -592,8 +690,6 @@ local function adaptSection(sect)
 
 	end
 
-
-
 	function s:CreateButton(o, cb)
 
 		o = normOpts(o, cb)
@@ -601,8 +697,6 @@ local function adaptSection(sect)
 		return sect:CreateButton(o.name, o.callback)
 
 	end
-
-
 
 	function s:CreateStat(o)
 
@@ -629,8 +723,6 @@ local function adaptSection(sect)
 
 	end
 
-
-
 	function s:CreateInput(o)
 
 		o = normOpts(o)
@@ -638,8 +730,6 @@ local function adaptSection(sect)
 		return sect:CreateTextbox(o.name, o.placeholder, o.callback, o.name)
 
 	end
-
-
 
 	function s:CreateKeybind(o, cb)
 
@@ -649,13 +739,9 @@ local function adaptSection(sect)
 
 	end
 
-
-
 	return s
 
 end
-
-
 
 local function adaptTab(wtab)
 
@@ -689,8 +775,6 @@ local function adaptTab(wtab)
 
 end
 
-
-
 local window = {}
 
 window._raw = WindowRaw
@@ -717,10 +801,6 @@ function window:Notify(o)
 
 end
 
-
-
-
-
 _G.FS_Notify = function(title, content, dur)
 
 	pcall(function() window:Notify({ title = title, content = content, duration = dur or 4 }) end)
@@ -737,32 +817,10 @@ local credits = window:CreateTab({ name = "Credits" })
 
 local cfgTab = window:CreateTab({ name = "Configs" })
 
-
-
-
-
 -- ===================== MAIN =====================
 
--- Add your UI Template features below. Example:
-
--- tab:CreateSection({ name = "Main" })
-
--- tab:CreateToggle({ name = "Auto Farm", value = false, callback = function(v) print("Auto Farm", v) end })
-
--- tab:CreateSlider({ name = "Farm Speed", range = {1, 100}, increment = 1, value = 30, callback = function(v) print(v) end })
-
-do
-
-    tab:CreateSection({ name = "Main" })
-
-    local mainSec = tab:CreateSection({ name = "Status" })
-
-    local stat = mainSec:CreateStat({ name = "Status", value = "Ready - add your logic here" })
-
-    _G.TemplateStatus = stat -- keep a handle: stat.Set("...") (dot, not colon) updates the text
-
-end
-
+-- The Main tab now hosts the Auto Farm section (hover flight + projectile
+-- dodge + optional orb swoop). The old placeholder Status section was removed.
 
 -- ===================== LOBBY: AUTO JOIN =====================
 -- Auto Join: picks a map from the in-game world-selection UI and queues it, so the
@@ -1054,15 +1112,539 @@ do
 
 	task.spawn(autoRaidQueueLoop)
 
-	_G.FS_StartAutoRaid = function(on)
+_G.FS_StartAutoRaid = function(on)
 
-		autoRaidOn = on
+	autoRaidOn = on
 
-		if on then task.spawn(autoRaidQueueLoop) end
+	if on then task.spawn(autoRaidQueueLoop) end
 
 	end
-
 end
+
+-- ===================== ROUND-END SCREEN HELPERS =====================
+-- Win OR death, the run ends behind TWO gate screens before the RoundEnd
+-- reward screen appears (verified in the game's DeathScreen/RoundEnd clients):
+--   1. DeathFrame  -> its "Continue" button advances to RoundEnd/Victory
+--   2. VictoryFrame -> ANY click/touch dismisses it into RoundEnd:Show()
+-- Without clicking through these, Auto Replay / Auto Return Lobby never see
+-- RoundEnd become visible and wait forever.
+do
+	local function fsFrame(name)
+		local f = nil
+		pcall(function()
+			local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+			local frames = pg and pg:FindFirstChild("Frames")
+			f = frames and frames:FindFirstChild(name)
+		end)
+		return f
+	end
+
+	-- fires a GuiButton the way the game itself would: its own connections first
+	-- (getconnections on BOTH click signals), then firesignal, then a synthetic
+	-- click at its center as the last resort. Returns true if any path fired.
+	function _G.FS_PressButton(btn)
+		if not (btn and btn:IsA("GuiButton")) then return false end
+		local fired = false
+		if getconnections then
+			pcall(function()
+				for _, sig in ipairs({ btn.MouseButton1Click, btn.Activated }) do
+					for _, conn in ipairs(getconnections(sig)) do
+						local ok = pcall(function() conn:Fire() end)
+						if ok then fired = true end
+					end
+				end
+			end)
+		end
+		if not fired and firesignal then
+			pcall(function()
+				firesignal(btn.MouseButton1Click)
+				fired = true
+			end)
+		end
+		if not fired then
+			pcall(function()
+				local cam = workspace.CurrentCamera
+				local vp = cam and cam.ViewportSize or Vector2.new(960, 540)
+				local VIM = game:GetService("VirtualInputManager")
+				local x, y = vp.X / 2, vp.Y / 2
+				pcall(function()
+					local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+					x, y = ap.X + as.X / 2, ap.Y + as.Y / 2
+				end)
+				VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+				task.wait(0.05)
+				VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+				fired = true
+			end)
+		end
+		return fired
+	end
+
+	-- click through the death screen and victory splash if they are up
+	function _G.FS_ClickThroughEndGates()
+		local death = fsFrame("DeathFrame")
+		if death and death.Visible then
+			-- the death screen has TWO advance paths: Continue (DeathScreen client
+			-- line 65 -> RoundEnd:Show/showVictory) and Give Up. Try every visible
+			-- GuiButton in Buttons until one of them clears the frame — some skins
+			-- bury Continue or name the button differently, so don't hard-code it.
+			local buttons = death:FindFirstChild("Buttons")
+			local pressed = false
+			if buttons then
+				local cont = buttons:FindFirstChild("Continue")
+				if cont and cont:IsA("GuiButton") then pressed = _G.FS_PressButton(cont) or pressed end
+				if not pressed then
+					for _, b in ipairs(buttons:GetChildren()) do
+						if b:IsA("GuiButton") and b ~= cont and b.Visible
+							and b.Name ~= "Revive" and b.Name ~= "Spectate" then
+							pressed = _G.FS_PressButton(b) or pressed
+							if pressed then break end
+						end
+					end
+				end
+			end
+			-- last resort: re-fire the DeathScreen client's Continue handler even
+			-- if the button was somehow invisible/renamed
+			if not pressed and buttons then
+				local cont = buttons:FindFirstChild("Continue")
+				if cont then pressed = _G.FS_PressButton(cont) or pressed end
+			end
+			task.wait(0.6)
+			return true
+		end
+		-- VictoryFrame: the game dismisses it on UserInputService.InputBegan with
+		-- gameProcessed == false (MouseButton1/Touch/Gamepad1) -> RoundEnd:Show().
+		-- VIM clicks don't always reach that listener, so fire the connection we
+		-- can see first; a real VIM click is the fallback.
+		local UISvc = game:GetService("UserInputService")
+		local vict = fsFrame("VictoryFrame")
+		if vict and vict.Visible then
+			local dismissed = false
+			if getconnections then
+				pcall(function()
+					for _, conn in ipairs(getconnections(UISvc.InputBegan)) do
+						-- only scripts (the game's), skip our own hub listeners
+						if conn.Script and conn.Script ~= script then
+							local ok = pcall(function()
+								conn:Fire({ UserInputType = Enum.UserInputType.MouseButton1 }, false)
+							end)
+							if ok then dismissed = true end
+						end
+					end
+				end)
+			end
+			if not dismissed then
+				pcall(function()
+					local VIM = game:GetService("VirtualInputManager")
+					local cam = workspace.CurrentCamera
+					local vp = cam and cam.ViewportSize or Vector2.new(960, 540)
+					VIM:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
+					task.wait(0.05)
+					VIM:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
+				end)
+			end
+			task.wait(0.6)
+			return true
+		end
+		return false
+	end
+end
+
+-- ===================== AUTO REPLAY WAVE LOOP =====================
+-- Fires ONLY after a finished round (win or death): the trigger is the game's
+-- own RoundEnd screen turning Visible (its "Again" button = replay). Never
+-- from lobby idle. Queues the last selected map + difficulty via the game's
+-- own WorldSelection channel, exactly like Auto Join does.
+do
+	local replayRunning = false
+	local function roundEndVisible()
+		local ok, v = pcall(function()
+			local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+			local frames = pg and pg:FindFirstChild("Frames")
+			local re = frames and frames:FindFirstChild("RoundEnd")
+			return re ~= nil and re.Visible == true
+		end)
+		return ok and v or false
+	end
+	local function autoReplayLoop()
+		if replayRunning then return end
+		replayRunning = true
+		while getFlag("AutoReplayOn") and isCurrentGen() do
+			-- click through death/victory gates first — RoundEnd sits behind them
+			pcall(function() _G.FS_ClickThroughEndGates() end)
+			-- arm only when a round actually finished (win/death -> RoundEnd screen)
+			local wasInRound = getFlag("FS_WasInRound")
+			if not wasInRound then
+				if roundEndVisible() then RS:SetAttribute("FS_WasInRound", true) end
+				task.wait(1)
+			else
+				local lb = workspace:FindFirstChild("Lobby")
+				-- RoundEnd reward screen still up? Its "Again" button IS the replay
+				-- path (GameServiceClient:PlayAgain) — pressing it re-queues without
+				-- walking back through world selection. Fall back to manual queueing.
+				local pressedAgain = false
+				pcall(function()
+					local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+					local frames = pg and pg:FindFirstChild("Frames")
+					local re = frames and frames:FindFirstChild("RoundEnd")
+					local again = re and re:FindFirstChild("Buttons") and re.Buttons:FindFirstChild("Again")
+					if again and again:IsA("GuiButton") and again.Visible and re.Visible then
+						pressedAgain = _G.FS_PressButton(again) or false
+						if not pressedAgain then
+							pcall(function()
+								local GS = require(RS.Shared.Services.GameService.GameServiceClient)
+								GS:PlayAgain()
+							end)
+							pressedAgain = true
+						end
+					end
+				end)
+				if pressedAgain then
+					RS:SetAttribute("FS_WasInRound", false)
+					if _G.FS_Notify then pcall(function() _G.FS_Notify("Auto Replay", "Round ended -> pressed Again") end) end
+					task.wait(5)
+				elseif lb then
+					-- round over: queue again (queueWorld is defined above in this scope)
+					local map = getFlag("Lobby_World") or "Grasslands"
+					local diff = getFlag("Lobby_Difficulty") or "Normal"
+					queueWorld(WORLD_LABELS[map] or map, diff)
+					pcall(function()
+						local netQ = Networker.client.new("QueueService", {})
+						netQ:fire("PartySizeSelected", 1)
+					end)
+					task.wait(0.3)
+					pcall(function()
+						local netQ = Networker.client.new("QueueService", {})
+						netQ:fire("Created")
+					end)
+					RS:SetAttribute("FS_WasInRound", false)
+					-- hold position inside the assigned queue circle like Auto Join
+					local deadline = os.clock() + 30
+					while os.clock() < deadline and getFlag("AutoReplayOn") do
+						if not workspace:FindFirstChild("Lobby") then break end
+						local h = getCharacterHRP()
+						if h then
+							local areas = lb:FindFirstChild("Areas")
+							local qFolder = areas and areas:FindFirstChild("Queue")
+							local best, bd = nil, math.huge
+							if qFolder then
+								for _, q in ipairs(qFolder:GetChildren()) do
+									if q:IsA("Model") and q:FindFirstChild("Container") then
+										local c = q.Container.Position
+										local d = (Vector3.new(c.X, 0, c.Z) - Vector3.new(h.Position.X, 0, h.Position.Z)).Magnitude
+										if d < bd then bd = d; best = q end
+									end
+								end
+							end
+							if best and bd < 80 then
+								pcall(function() h.CFrame = CFrame.new(best.Container.Position + Vector3.new(0, 4, 0)) end)
+							end
+						end
+						task.wait(0.3)
+					end
+				else
+					RS:SetAttribute("FS_WasInRound", false) -- in a match (RoundEnd hidden)
+					task.wait(2)
+				end
+			end
+		end
+		replayRunning = false
+	end
+	task.spawn(autoReplayLoop)
+	_G.FS_StartAutoReplay = function(on)
+		RS:SetAttribute("TPL_AutoReplayOn", on)
+	end
+end
+
+-- ===================== AUTO RETURN LOBBY LOOP =====================
+-- Fires ONLY after a finished round (win or death): the run ends behind the
+-- death/victory gate screens — click through those first, then wait for the
+-- game's own RoundEnd reward screen and press its "Lobby" button
+-- (RoundEnd.Buttons.Lobby -> GameServiceClient:Continue()).
+do
+	local retRunning = false
+	local function autoReturnLobbyLoop()
+		if retRunning then return end
+		retRunning = true
+		local function roundEndVisible()
+			local ok, v = pcall(function()
+				local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+				local frames = pg and pg:FindFirstChild("Frames")
+				local re = frames and frames:FindFirstChild("RoundEnd")
+				return re ~= nil and re.Visible == true
+			end)
+			return ok and v or false
+		end
+		while getFlag("AutoReturnLobbyOn") and isCurrentGen() do
+			local inMatch = workspace:FindFirstChild("Map") ~= nil and workspace:FindFirstChild("Lobby") == nil
+			if not inMatch then
+				task.wait(1)
+			else
+				-- death screen or victory splash up? click through them first —
+				-- RoundEnd is unreachable until both are dismissed
+				if pcall(function() _G.FS_ClickThroughEndGates() end) then
+					task.wait(0.5)
+				end
+				-- look for the round-end screen
+				local pressed = false
+				pcall(function()
+					local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+					local frames = pg and pg:FindFirstChild("Frames")
+					local roundEnd = frames and frames:FindFirstChild("RoundEnd")
+					local btn = roundEnd and roundEnd:FindFirstChild("Buttons")
+						and roundEnd.Buttons:FindFirstChild("Lobby")
+					-- win/death gate: the RoundEnd screen itself must be on screen
+					if btn and btn:IsA("GuiButton") and btn.Visible
+						and roundEnd.Visible and roundEndVisible() then
+						-- fire the game's own handler first (safest path)
+						local okPress = _G.FS_PressButton and _G.FS_PressButton(btn)
+						-- fall back to the service call directly
+						if not okPress then
+							pcall(function()
+								local GS = require(RS.Shared.Services.GameService.GameServiceClient)
+								GS:Continue()
+							end)
+						end
+						pressed = true
+					end
+				end)
+				if pressed then
+					RS:SetAttribute("TPL_AutoReturnLobbyOn", false) -- one-shot per round
+					if _G.FS_Notify then pcall(function() _G.FS_Notify("Auto Return Lobby", "Round ended -> returning to lobby") end) end
+					task.wait(5) -- let the teleport settle before re-checking
+				else
+					task.wait(0.5)
+				end
+			end
+		end
+		retRunning = false
+	end
+	task.spawn(autoReturnLobbyLoop)
+	_G.FS_StartAutoReturnLobby = function(on)
+		RS:SetAttribute("TPL_AutoReturnLobbyOn", on)
+		if on then task.spawn(autoReturnLobbyLoop) end
+	end
+end
+
+-- ===================== AUTO SMART CARDS =====================
+-- Picks level-up cards by priority without touching the UI: fires the same
+-- remote the Upgrade frame uses (GameServiceClient:UpgradeSelected(name, count))
+-- as soon as IsChoosingUpgrade flips true.
+-- Strategy:
+--   * early game: grab Luck first (better rare rolls for the rest of the run)
+--   * late game (>= min level): Luck is deprioritized
+--   * weapons are ranked to match the hover auto-farm: ranged/AOE first,
+--     close-range last
+--   * passives fill whatever's left
+
+do
+	-- // WEAPON PRIORITY: long/AOE range first, close-range last (hover farm) //
+	local WEAPON_PRIORITY = {
+		-- S-tier: ranged AOE / high raw damage — perfect for hover farm
+		"Inferno Sword", "Laserbeam", "Trident", "Meteor", "Ban Hammer",
+		"Black Hole Cannon", "Void Scythe", "Firestaff", "Lightning Staff",
+		-- A-tier: solid ranged or homing
+		"Missile", "Tornado", "Bananarang", "Bow", "Revolver", "Sniper",
+		"Poison Flask", "Ninja Star",
+		-- B-tier: AOE zones that still reach from above
+		"Aura", "Explosion", "Axe",
+		-- C-tier: walkers / short reach — least useful while hovering
+		"Frost Walker", "Flame Walker", "Flamethrower", "Spike Ball", "Sword",
+		"Shotgun", "Daggers",
+	}
+	local WEAPON_RANK = {}
+	for i, w in ipairs(WEAPON_PRIORITY) do WEAPON_RANK[w] = i end
+
+	-- // PASSIVE PRIORITY //
+	local function passiveScore(id, kind)
+		-- kind: "early" (levels 1-9), "mid" (10-19), "late" (20+)
+		if id:find("Luck") then
+			-- early: top priority, late: dead last
+			if kind == "early" then return 1000 end
+			if kind == "mid" then return 55 end
+			return -10
+		end
+		local tier = {
+			["Multishot"] = 900,
+			["Projectile Count Epic"] = 880, ["Projectile Count Legendary"] = 885,
+			["Damage Legendary"] = 850, ["Damage Epic"] = 820, ["Damage Rare"] = 700, ["Damage Common"] = 500,
+			["Attack Speed Legendary"] = 840, ["Attack Speed Epic"] = 810, ["Attack Speed Rare"] = 690, ["Attack Speed Common"] = 490,
+			["Size Legendary"] = 780, ["Size Epic"] = 750, ["Size Rare"] = 620,
+			["Piercing Rare"] = 760, ["Ricochet Rare"] = 755,
+			["Bolt"] = 740, ["Blaze"] = 730, ["Freeze"] = 720,
+			["XP Gain Legendary"] = 660, ["XP Gain Epic"] = 640, ["XP Gain Rare"] = 560,
+			["Crit Chance Rare"] = 620, ["Crit Chance Common"] = 480,
+			["Power Trio"] = 700,
+			["Soul of Swiftness"] = 540,
+			["Demon Slayer"] = 520,
+			["Regen Epic"] = 500, ["Regen Rare"] = 420, ["Regen Common"] = 350,
+			["Health Legendary"] = 460, ["Health Epic"] = 430, ["Health Rare"] = 360, ["Health Common"] = 300,
+			["Armor Epic"] = 450, ["Armor Rare"] = 400,
+			["Lifesteal Epic"] = 440, ["Lifesteal Rare"] = 380,
+			["Movement Speed Legendary"] = 420, ["Movement Speed Epic"] = 400, ["Movement Speed Rare"] = 340, ["Movement Speed Common"] = 280,
+			["Projectile Speed Epic"] = 380, ["Projectile Speed Rare"] = 330, ["Projectile Speed Common"] = 270,
+			["Wind Blessing"] = 350, ["Perilous Fervor"] = 320, ["Thorns Rare"] = 250,
+			["Stand Strong"] = 50, -- hover farm: we're never still on the ground
+			["Giant's Strength"] = 100, -- bigger hitbox = worse while dodging
+			["Extra Jump Legendary"] = 80,
+		}
+		return tier[id] or 200
+	end
+
+	local function levelKind(level)
+		if level < 10 then return "early" end
+		if level < 20 then return "mid" end
+		return "late"
+	end
+
+	local smartRunning = false
+	local function getRunLevel()
+		-- player run level comes from PlayerRunData
+		local ok, PRD = pcall(function() return require(RS.Shared.Modules.Core.PlayerRunData) end)
+		if not ok then return 1 end
+		local ok2, data = pcall(function() return PRD:get(Players.LocalPlayer) end)
+		if ok2 and type(data) == "table" then
+			return tonumber(data.level) or 1
+		end
+		return 1
+	end
+
+	local function pickBestCard(offers)
+		-- offers: {[cardId] = {rarity, ...}, ...} — the shape showUpgrades receives
+		if type(offers) ~= "table" then return nil end
+		local level = getRunLevel()
+		local kind = levelKind(level)
+		local best, bestScore = nil, -math.huge
+		for id in pairs(offers) do
+			local s
+			if WEAPON_RANK[id] then
+				s = 2000 - WEAPON_RANK[id] -- always above passives unless mid-late weapon is C-tier
+			else
+				s = passiveScore(id, kind)
+			end
+			if s > bestScore then bestScore = s best = id end
+		end
+		return best
+	end
+
+	local function getUpgradeParts()
+		local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+		local frames = pg and pg:FindFirstChild("Frames")
+		local up = frames and frames:FindFirstChild("Upgrades")
+		return up, up and up:FindFirstChild("Holder"), up and up:FindFirstChild("SpinHolder")
+	end
+
+	-- Skip Card Animation: ported from the OLD proven script — fake owning the
+	-- FastUpgrade skill (hook DataService.client:get) and send the screen-center
+	-- click the Upgrade frame listens for. Works without the skill owned.
+	local VIM = game:GetService("VirtualInputManager")
+	local function skipCardAnimation()
+		pcall(function()
+			local up, holder, spin = getUpgradeParts()
+			if not (up and up.Visible) then return end
+			spin = up:FindFirstChild("SpinHolder")
+			if not (spin and spin.Visible) then return end
+			if not getgenv()._fsFastHooked then
+				getgenv()._fsFastHooked = true
+				local okDS, DS = pcall(function() return require(RS.Packages.DataService) end)
+				if okDS and DS and DS.client and DS.client.get then
+					local orig = DS.client.get
+					DS.client.get = function(self, path)
+						if type(path) == "table" and path[1] == "stats" and path[2] == "skillTree" and path[3] == "FastUpgrade" then
+							return true
+						end
+						return orig(self, path)
+					end
+				end
+			end
+			local cam = workspace.CurrentCamera
+			local sz = cam and cam.ViewportSize or Vector2.new(960, 540)
+			VIM:SendMouseButtonEvent(sz.X * 0.5, sz.Y * 0.5, 0, true, game, 0)
+			task.wait(0.05)
+			VIM:SendMouseButtonEvent(sz.X * 0.5, sz.Y * 0.5, 0, false, game, 0)
+		end)
+	end
+
+	-- Read the visible offered cards (name, rarity, frame) from the Holder —
+	-- exactly like the old working Auto Pick loop.
+	local function getOfferedCards()
+		local up = getUpgradeParts()
+		if not up or not up.Visible then return nil end
+		local holder = up:FindFirstChild("Holder")
+		if not holder then return nil end
+		local cards = {}
+		for i = 1, 12 do
+			local sel = holder:FindFirstChild("Selection" .. i)
+			if sel and sel.Visible then
+				local nameLbl = sel:FindFirstChild("ItemTitle")
+				local name = nameLbl and nameLbl.Text or ""
+				if name ~= "" then
+					cards[#cards + 1] = { frame = sel, name = name }
+				end
+			end
+		end
+		return #cards > 0 and cards or nil
+	end
+
+	local function smartCardLoop()
+		if smartRunning then return end
+		smartRunning = true
+		-- Ported from the OLD working script: no choosing gate, no arming, no
+		-- remotes — poll the visible offer set, VIM-click the best card, reset
+		-- the signature after every pick. This is what actually works.
+		local lastSig = nil
+		while getFlag("AutoSmartCardsOn") and isCurrentGen() do
+			local okE, err = pcall(function()
+				local cards = getOfferedCards()
+				if not cards then
+					lastSig = nil
+					return
+				end
+				if getFlag("SkipCardAnimOn") then pcall(skipCardAnimation) end
+				local sigParts = {}
+				for _, c in ipairs(cards) do sigParts[#sigParts + 1] = c.name end
+				local sig = table.concat(sigParts, "|")
+				if sig == lastSig then return end
+				lastSig = sig
+				local nameToIndex = {}
+				for _, c in ipairs(cards) do nameToIndex[c.name] = tonumber(c.frame.Name:match("Selection(%d+)")) end
+				local pick = pickBestCard(nameToIndex)
+				if pick and nameToIndex[pick] then
+					local card = cards[1] and cards[1].frame.Parent:FindFirstChild("Selection" .. nameToIndex[pick])
+					if card and card.Parent then
+						task.wait(0.08)
+						-- the old script's click: synthetic mouse down+up at card center
+						pcall(function()
+							local ap, as = card.AbsolutePosition, card.AbsoluteSize
+							local x, y = ap.X + as.X / 2, ap.Y + as.Y / 2
+							VIM:SendMouseButtonEvent(x, y, 0, true, game, 1)
+							task.wait(0.03)
+							VIM:SendMouseButtonEvent(x, y, 0, false, game, 1)
+						end)
+						lastSig = nil
+						if _G.FS_Notify then pcall(function() _G.FS_Notify("Auto Smart Cards", "level " .. getRunLevel() .. " -> picked " .. pick) end) end
+						task.wait(0.5)
+					end
+				end
+			end)
+			if not okE then warn("[FS SmartCards] " .. tostring(err)) end
+			task.wait(0.2)
+		end
+		smartRunning = false
+	end
+	task.spawn(smartCardLoop)
+	_G.FS_StartAutoSmartCards = function(on)
+		RS:SetAttribute("TPL_AutoSmartCardsOn", on)
+		if on then task.spawn(smartCardLoop) end
+	end
+end
+
+-- Skip Card Animation stays tied to Auto Smart Cards. Keep the flag mirrored
+-- so the pick loop's existing getFlag("SkipCardAnimOn") check works.
+RS:GetAttributeChangedSignal("TPL_AutoSmartCardsOn"):Connect(function()
+	RS:SetAttribute("TPL_SkipCardAnimOn", RS:GetAttribute("TPL_AutoSmartCardsOn") and true or false)
+end)
+RS:SetAttribute("TPL_SkipCardAnimOn", RS:GetAttribute("TPL_AutoSmartCardsOn") and true or false)
 
 -- ===================== LOBBY TAB UI =====================
 do
@@ -1742,7 +2324,10 @@ local InventoryFrameCtl = nil
 
 pcall(function()
 
-	local ok, m = pcall(require, RS.Shared.UI.Frames:WaitForChild("InventoryFrame"))
+	-- timeout: this module only exists in the LOBBY place; in a match place
+	-- waiting forever stalled the whole hub (farm/toggles never registered)
+
+	local ok, m = pcall(require, RS.Shared.UI.Frames:WaitForChild("InventoryFrame", 5))
 
 	if ok and type(m) == "table" and m.gradeStartSignal then InventoryFrameCtl = m end
 
@@ -1867,7 +2452,9 @@ do
 
 	pcall(function()
 
-		local ok, m = pcall(require, RS.Shared.Services:WaitForChild("SkillTestServiceClient"))
+		-- lobby-only module: timeout so a match-place load never stalls here
+
+		local ok, m = pcall(require, RS.Shared.Services:WaitForChild("SkillTestServiceClient", 5))
 
 		if ok and type(m) == "table" and m.started then SkillTestCtl = m end
 
@@ -2736,7 +3323,6 @@ do
 
 	task.spawn(autoGradeLoop)
 
-
 	_G.FS_StartAutoGrade = function(on)
 
 		RS:SetAttribute("TPL_AutoGradeOn", on)
@@ -3040,7 +3626,1085 @@ do
 
 end
 
+-- ===================== MAIN TAB: AUTO FARM =====================
+-- Flight-based auto farm for the round (Volcano etc). The character hovers
+-- ABOVE the enemy cluster so melee enemies can't reach it, while the game's own
+-- weapons auto-attack whatever is in range (no attack driving here). Enemy
+-- PROJECTILES are the only real threat in the air: they fly as models under
+-- workspace.VFX (e.g. Fireball), so a velocity-based dodge sidesteps when a
+-- shot's future path passes near the character. Orb collecting is a separate
+-- toggle: the server grants XP on its own ~0.6s distance tick, so "Auto
+-- Collect Orbs" flies a smooth swoop down INTO the orb cluster (movement, not
+-- teleport - a teleport would be ignored server-side) and holds there until
+-- the orbs vacuum in, then climbs back to the fight hover.
 
+local RunServiceFarm = game:GetService("RunService")
+
+if getFlag("Farm_Height") == nil then RS:SetAttribute("TPL_Farm_Height", 28) end
+if getFlag("Farm_OrbDwell") == nil then RS:SetAttribute("TPL_Farm_OrbDwell", 2) end
+-- hover/dodge flight responsiveness (the mover's lerp strength); higher = snappier
+if getFlag("Farm_Speed") == nil then RS:SetAttribute("TPL_Farm_Speed", 7) end
+
+local farmOn = false
+local farmCollectOn = false
+-- portal priority handoff: while Auto Enter Portal is walking/holding, the
+-- farm loop must NOT write moverGoal — both loops otherwise fight over the
+-- same flight target every frame. The portal is the end of the run: it wins.
+local portalDriving = false
+
+-- // SCENE READS //--
+
+-- in a round = the match workspace exists (Lobby exists only in the lobby)
+local function inRound()
+
+	return workspace:FindFirstChild("Enemies") ~= nil and workspace:FindFirstChild("Lobby") == nil
+
+end
+
+-- nearest walkable floor under a point: raycast DOWN from just ABOVE the point,
+-- skipping INVISIBLE boundary geometry (Grasslands shells the whole arena in a
+-- giant transparent wall union whose top eats rays from above and reports a
+-- fake floor at ~Y114 — every map with such a shell hovered on the shell, not
+-- the floor). Walks through transparent/boundary hits until a real surface.
+-- Fail-open: raycast error / no hit => assume ground at the point itself.
+local function groundBelow(x, z, fromY)
+
+	local hitY = nil
+
+	pcall(function()
+
+			-- match maps spawn HIGH (every world template's 'ground level' marker
+			-- sits at Y~161.5, island top ~164): always cast from a start above
+			-- the highest possible floor, not from fromY-8 (a Y52 start begins
+			-- UNDER the map floor on every world => no hit => hover fell back to
+			-- Y3+height and the farm flew away from spawn on tall maps)
+			local origin = Vector3.new(x, math.max(fromY or 60, 340) + 20, z)
+
+		local params = RaycastParams.new()
+
+		params.FilterType = Enum.RaycastFilterType.Exclude
+
+		-- FilterDescendantsInstances returns a COPY: table.insert on it never
+		-- writes back, so the old boundary-walk re-hit the same invisible shell
+		-- 6 times and returned nil. Rebuild the list locally and ASSIGN it.
+		local exclude = { Players.LocalPlayer.Character }
+
+		local last = nil
+
+		for _ = 1, 12 do
+
+			params.FilterDescendantsInstances = exclude
+
+			local res = workspace:Raycast(origin, Vector3.new(0, -800, 0), params)
+
+			if not res or not res.Instance then break end
+
+			local inst = res.Instance
+
+			local boundary = inst.Transparency >= 0.99 or inst.Name == "Wall" or inst.Name == "selectionLine"
+
+			if not boundary then
+
+				hitY = res.Position.Y
+
+				break
+
+			end
+
+			if inst == last then break end -- filter write failed; don't spin
+
+			last = inst
+
+			exclude[#exclude + 1] = inst
+
+		end
+
+	end)
+
+	return hitY
+
+end
+
+-- one enemy sample: position of the live melee threat (Humanoid alive, has HRP
+-- or a Hitbox part). Enemy rigs are R6 models with a Humanoid + Hitbox part.
+local function enemyPos(e)
+
+	if not e:IsA("Model") then return nil end
+
+	local hum = e:FindFirstChildOfClass("Humanoid")
+
+	if hum and hum.Health <= 0 then return nil end
+
+	local hrp = e:FindFirstChild("HumanoidRootPart") or e:FindFirstChild("Hitbox") or e:FindFirstChild("Torso")
+
+	if hrp and hrp:IsA("BasePart") then return hrp.Position end
+
+	local pp = e.PrimaryPart or e:FindFirstChildWhichIsA("BasePart", true)
+
+	if pp then return pp.Position end
+
+	return nil
+
+end
+
+-- cluster center + count of live enemies (dist-filtered MEDIAN per axis: a few
+-- despawn ghosts parked tens of thousands of studs away must not drag the
+-- hover point off the map)
+local farmScanCache, farmScanAt = nil, 0
+
+local function getFarmScan()
+
+	if os.clock() - farmScanAt < 0.4 then return farmScanCache end
+
+	farmScanAt = os.clock()
+
+	farmScanCache = nil
+
+	local enemies = workspace:FindFirstChild("Enemies")
+
+	if not enemies then return nil end
+
+	local xs, ys, zs = {}, {}, {}
+
+	local n = 0
+
+	local myPos = nil
+
+	local char = Players.LocalPlayer.Character
+
+	local myHrp = char and char:FindFirstChild("HumanoidRootPart")
+
+	if myHrp then myPos = myHrp.Position end
+
+	for _, e in ipairs(enemies:GetChildren()) do
+
+		local p = enemyPos(e)
+
+		if p and p.Y > -50 and p.Y < 300 then
+
+			-- only enemies near the character define the hover point (the map
+			-- floor is 1500x1500; far waves can spawn anywhere)
+
+			if not myPos or (Vector3.new(p.X, 0, p.Z) - Vector3.new(myPos.X, 0, myPos.Z)).Magnitude < 400 then
+
+				n = n + 1
+
+				table.insert(xs, p.X)
+				table.insert(ys, p.Y)
+				table.insert(zs, p.Z)
+			end
+
+		end
+
+	end
+
+	if n == 0 then return nil end
+
+	table.sort(xs)
+	table.sort(ys)
+	table.sort(zs)
+
+	local mid = math.ceil(n / 2)
+
+	farmScanCache = { pos = Vector3.new(xs[mid], ys[mid], zs[mid]), count = n }
+
+	return farmScanCache
+
+end
+
+-- // CHARACTER HELPERS //--
+
+local function getCharParts()
+
+	local char = Players.LocalPlayer.Character
+
+	if not char then return nil end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+
+	if not hum or not hrp then return nil end
+
+	return char, hum, hrp
+
+end
+
+-- the game death-parks by ANCHORING the HRP: a server-owned anchored assembly
+-- silently rolls back client CFrame writes, so flight must unanchor first
+local function ensureFlightReady(hrp)
+
+	if hrp.Anchored then hrp.Anchored = false end
+
+end
+
+-- // DODGE: velocity-projectile sidestep //--
+-- enemy shots are models under workspace.VFX moving with AssemblyLinearVelocity
+-- (bananarangs move by CFrame - tracked via position delta). If a shot's
+-- FUTURE path (next ~0.7s) passes within `radius` of the character, sidestep
+-- perpendicular to the shot's travel direction.
+local dodgeDir = 1 -- alternates so repeated shots don't push us off the map
+
+local dodgeUntil = 0
+
+local dodgeVec = Vector3.zero
+
+local lastShotPos = {} -- [model] = last position, for CFrame-movers
+local shotFirstSeen = {} -- [model] = first position we saw it at
+local shotSeenAt = {} -- [model] = os.clock() of first sighting
+
+local function projectileDodge(hrp, dt)
+
+	local vfx = workspace:FindFirstChild("VFX")
+
+	if not vfx then return Vector3.zero end
+
+	local myPos = hrp.Position
+
+	local now = os.clock()
+
+	-- prune stale trackers
+
+	for m in pairs(lastShotPos) do
+
+		if not m.Parent then lastShotPos[m] = nil end
+
+	end
+
+	for m in pairs(shotFirstSeen) do
+
+		if not m.Parent then shotFirstSeen[m] = nil shotSeenAt[m] = nil end
+
+	end
+
+	for _, m in ipairs(vfx:GetChildren()) do
+
+		if m:IsA("Model") then
+
+			-- only projectile-looking models: they fly; skip loot/XP/keys
+
+			local nm = m.Name
+
+			if nm ~= "xp" and nm ~= "keys" and nm ~= "InfernoKey" and nm ~= "Chest" then
+
+				local pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+
+				if pp then
+
+					local p, v = pp.Position, pp.AssemblyLinearVelocity
+
+					-- OWN-SHOT FILTER: our own weapon projectiles spawn in the same
+					-- workspace.VFX folder with the SAME names as enemy shots (no owner
+					-- tag exists client-side). A shot FIRST SEEN right on top of the
+					-- character is ours (enemy shots come from the swarm, far away);
+					-- flag it once and skip that model for its whole life — otherwise
+					-- every own shot triggered a +16-stud dodge and the farm surfed
+					-- across the map
+					if shotFirstSeen[m] == nil then
+						shotFirstSeen[m] = ((p - myPos).Magnitude < 25) and true or false
+						shotSeenAt[m] = now
+					end
+					if shotFirstSeen[m] == true then
+						-- flagged as our own shot at first sighting: never dodge it
+					else
+
+					local speed = v.Magnitude
+
+					if speed < 1 then
+
+						-- CFrame-mover (bananarang): estimate velocity from the
+						-- position delta
+
+						local prev = lastShotPos[m]
+
+						if prev then
+
+							v = (p - prev) / math.max(dt, 1 / 60)
+
+							speed = v.Magnitude
+
+						end
+
+						lastShotPos[m] = p
+
+					end
+
+					-- a projectile is a FAST thing heading roughly at us
+
+					if speed > 25 then
+
+						local toMe = myPos - p
+
+						local dist = toMe.Magnitude
+
+						if dist < 130 then
+
+							local dir = v.Unit
+
+							-- closest approach of its path to my position
+
+							local t = math.clamp(toMe:Dot(dir), 0, 0.7 * speed)
+
+							local closest = p + dir * t
+
+							local miss = (myPos - closest).Magnitude
+
+							if miss < 14 and now > dodgeUntil then
+
+								-- sidestep perpendicular to the shot's travel,
+								-- keeping some height
+
+								local perp = Vector3.new(-dir.Z, 0, dir.X)
+
+								if perp.Magnitude < 0.1 then perp = Vector3.new(1, 0, 0) else perp = perp.Unit end
+
+								-- pick the side that goes TOWARD the shot's origin
+								-- side (dodging "behind" the shot path)
+
+								local side = ((p - myPos):Dot(perp) > 0) and 1 or -1
+
+								dodgeDir = -dodgeDir
+
+								dodgeVec = perp * side * 16 + Vector3.new(0, 6, 0)
+
+								dodgeUntil = now + 0.45
+
+								break
+
+							end
+
+						end
+
+					end
+
+					end -- speed<1 / if-true(pp block close)
+
+				end
+
+
+			end
+
+		end
+
+	end
+
+	if now < dodgeUntil then return dodgeVec end
+
+	return Vector3.zero
+
+end
+
+-- // MAIN FARM LOOP (OP v2) //--
+
+local farmThread = nil
+
+local OP_RANGED = { Fireball = true, ArrowShot = true, Bananarang = true }
+
+-- enemies that shoot: keep them OFF the hover-center so their shots arc
+-- wide, but their radius is still counted so the auto-attack reaches them
+local function isRanged(e)
+	if OP_RANGED[e.Name] then return true end
+	return false
+end
+
+-- // SMOOTH MOVER: framerate-based flight (kills the micro-teleport stutter) //--
+-- The old loop moved the character with one lerp step per 0.05s tick (20 Hz).
+-- Now the scan loop only computes the goal; a Heartbeat connection glides the
+-- character toward it every frame with dt-based exponential smoothing.
+local orbitAngle = 0
+local moverGoal = nil
+local moverLook = nil
+local moverConn = nil
+local function ensureMover()
+	if moverConn then return end
+	local rs = game:GetService("RunService")
+	moverConn = rs.Heartbeat:Connect(function(dt)
+		pcall(function()
+			if not farmOn and not farmCollectOn then return end
+			if not moverGoal then return end
+			local char = Players.LocalPlayer.Character
+			local h = char and char:FindFirstChild("HumanoidRootPart")
+			if not h then return end
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum and hum.Health <= 0 then return end
+			local cur = h.Position
+			-- flight speed: exponential smoothing strength, user-set (Farm_Speed,
+			-- default 7 = the original feel). Clamp hard: 1 crawls, 30 teleport-snaps
+			local spd = math.clamp(tonumber(getFlag("Farm_Speed")) or 7, 1, 30)
+			local alpha = 1 - math.exp(-dt * spd)
+			local step = cur:Lerp(moverGoal, alpha)
+			local lt = moverLook or step
+			h.CFrame = CFrame.lookAt(step, Vector3.new(lt.X, step.Y, lt.Z))
+			h.AssemblyLinearVelocity = Vector3.zero
+		end)
+	end)
+end
+
+-- orbit center: the arena floor part is the playable area (Map is a Folder,
+-- GetBoundingBox doesn't exist on Folders and the pcall used to fail silently,
+-- making the character orbit ITSELF). Floor is 1500x1500 centered on the map.
+local function getMapCenter(fallback)
+	local map = workspace:FindFirstChild("Map")
+	if map then
+		local floor = map:FindFirstChild("Floor")
+		if floor and floor:IsA("BasePart") then
+			return floor.Position
+		end
+		-- fallback: extent center over all BasePart descendants
+		local minv, maxv = nil, nil
+		pcall(function()
+			for _, d in ipairs(map:GetDescendants()) do
+				if d:IsA("BasePart") then
+					local p = d.Position - d.Size / 2
+					local q = d.Position + d.Size / 2
+					minv = minv and minv:Min(p) or p
+					maxv = maxv and maxv:Max(q) or q
+				end
+			end
+		end)
+		if minv and maxv then return (minv + maxv) / 2 end
+	end
+	return fallback
+end
+-- playable radius: half the Floor's XZ extent (orbit must stay INSIDE the map)
+local function getMapRadius(fallback)
+	local map = workspace:FindFirstChild("Map")
+	if map then
+		local floor = map:FindFirstChild("Floor")
+		if floor and floor:IsA("BasePart") then
+			return math.min(floor.Size.X, floor.Size.Z) * 0.5
+		end
+	end
+	return fallback
+end
+
+local function farmLoop()
+
+	while (farmOn or farmCollectOn) and isCurrentGen() do
+
+		if not inRound() then
+
+			task.wait(1)
+
+		else
+
+			local ok, err = pcall(function()
+
+				local char, hum, hrp = getCharParts()
+
+				if not char or not hum or not hrp then task.wait(0.5) return end
+
+				if hum.Health <= 0 then
+
+					-- dead: zero writes until respawn (verified death-loop regression)
+					task.wait(1)
+					return
+				end
+
+				-- Auto Enter Portal owns the mover right now (end of the run):
+				-- touch nothing, not even flight setup, until it is done
+				if portalDriving then task.wait(0.1) return end
+
+				ensureFlightReady(hrp)
+
+				local hoverH = tonumber(getFlag("Farm_Height")) or 28
+				local orbDwell = 2 -- fixed: swoop dwell (setting removed)
+				if RS:GetAttribute("TPL_FarmMode") == "🧪 Auto-Dodge — In Testing" then RS:SetAttribute("TPL_FarmMode", "Auto-Dodge") end
+				local farmMode = getFlag("FarmMode") or "Orbit Center"
+				local orbitR = tonumber(getFlag("Farm_OrbitRadius")) or 40
+				local orbitH = tonumber(getFlag("Farm_OrbitHeight")) or hoverH
+				local orbitSpd = tonumber(getFlag("Farm_OrbitSpeed")) or 20
+
+				-- // FULL SCAN: enemies + ranged flags + danger zones + orbs in one walk //--
+				local enemies = workspace:FindFirstChild("Enemies")
+				local vfx = workspace:FindFirstChild("VFX")
+				local myPos = hrp.Position
+				local myXZ = Vector3.new(myPos.X, 0, myPos.Z)
+
+				local meleeXs, meleeYs, meleeZs, meleeN = {}, {}, {}, 0
+				local allXs, allYs, allZs, allN = {}, {}, {}, 0
+				local orbXs, orbYs, orbZs, orbN = {}, {}, {}, 0
+				local dangerUntil = 0
+
+				if enemies and farmMode ~= "Orbit Center" then
+					for _, e in ipairs(enemies:GetChildren()) do
+						local p = enemyPos(e)
+						if p and p.Y > -50 and p.Y < 300
+							and (Vector3.new(p.X, 0, p.Z) - myXZ).Magnitude < 400 then
+							allN = allN + 1
+							table.insert(allXs, p.X); table.insert(allYs, p.Y); table.insert(allZs, p.Z)
+							if not isRanged(e) then
+								meleeN = meleeN + 1
+								table.insert(meleeXs, p.X); table.insert(meleeYs, p.Y); table.insert(meleeZs, p.Z)
+							end
+						end
+					end
+				end
+
+				-- // DANGER ZONES: ground telegraphs (DangerArea / SlashZone) — walk out early //--
+				if vfx then
+					for _, m in ipairs(vfx:GetChildren()) do
+						local nm = m.Name
+						if nm == "DangerArea" or nm == "SlashZone" then
+							local pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+							if pp then
+								local dp = pp.Position
+								-- roughly circular: radius from part size
+								local rad = math.max(pp.Size.X, pp.Size.Z) * 0.5 + 4
+								local dx, dz = myPos.X - dp.X, myPos.Z - dp.Z
+								if dx * dx + dz * dz < rad * rad then
+									-- walk to the nearest edge + margin
+									local dist = math.sqrt(dx * dx + dz * dz)
+									local ux, uz = (dist > 0.1) and dx / dist or 1, (dist > 0.1) and dz / dist or 0
+									local push = Vector3.new(ux, 0, uz) * (rad - dist + 6)
+									dangerUntil = os.clock() + 0.6
+									dodgeVec = push
+									dodgeUntil = dangerUntil
+								end
+							end
+						elseif nm == "xp" or nm == "keys" or nm == "InfernoKey" then
+							local pp = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+							if pp then
+								local p = pp.Position
+								if (Vector3.new(p.X, 0, p.Z) - myXZ).Magnitude < 250 then
+									orbN = orbN + 1
+									table.insert(orbXs, p.X); table.insert(orbYs, p.Y); table.insert(orbZs, p.Z)
+								end
+							end
+						end
+					end
+				end
+
+				-- median of each group (ghost positions can't drag the point)
+				local function med(xs, ys, zs, n)
+					if n == 0 then return nil end
+					table.sort(xs); table.sort(ys); table.sort(zs)
+					local mid = math.ceil(n / 2)
+					return Vector3.new(xs[mid], ys[mid], zs[mid])
+				end
+
+				local meleeC = med(meleeXs, meleeYs, meleeZs, meleeN)
+				local allC = med(allXs, allYs, allZs, allN)
+				local orbC = med(orbXs, orbYs, orbZs, orbN)
+
+				-- hover over MELEE cluster when it exists (they can't reach up there,
+				-- and ranged shots from the far side are less likely to arc at us)
+				-- else fall back to the all-enemy cluster
+				local fightC = meleeC or allC
+
+				-- fallback ground = character's own altitude, NOT 3: on high-spawned
+				-- maps a missed raycast used to drop the hover target to Y~31 while
+				-- enemies sat at Y~165 => 'flying away from spawn'
+				local myGroundGuess = myPos.Y - hoverH
+				local target
+				local lookT = fightC
+				if farmMode == "Orbit Center" then
+					-- orbit fly INSIDE the map, around the arena floor center
+					orbitAngle = orbitAngle + math.rad(orbitSpd) * 0.1
+					local c = getMapCenter(myPos)
+					-- clamp the radius so the circle stays on the playable floor
+					local maxR = (getMapRadius(300) or 300) - 30
+					if orbitR > maxR then orbitR = maxR end
+					local gy = groundBelow(c.X, c.Z, 150) or myGroundGuess
+					-- void guard: shrink the radius until the orbit point has ground under it
+					local effR = orbitR
+					for _ = 1, 4 do
+						local gx = c.X + math.cos(orbitAngle) * effR
+						local gz = c.Z + math.sin(orbitAngle) * effR
+						if groundBelow(gx, gz, 60) then break end
+						effR = effR * 0.75
+					end
+					target = Vector3.new(c.X + math.cos(orbitAngle) * effR, gy + orbitH, c.Z + math.sin(orbitAngle) * effR)
+					lookT = c
+				elseif fightC and farmOn then
+					local gy = groundBelow(fightC.X, fightC.Z, 60) or myGroundGuess
+					target = Vector3.new(fightC.X, gy + hoverH, fightC.Z)
+				elseif allC and farmOn then
+					local gy = groundBelow(allC.X, allC.Z, 60) or myGroundGuess
+					target = Vector3.new(allC.X, gy + hoverH, allC.Z)
+				else
+					-- no enemies (wave break): hover where we are
+					local gy = groundBelow(myPos.X, myPos.Z, 60) or myGroundGuess
+					target = Vector3.new(myPos.X, gy + hoverH, myPos.Z)
+				end
+
+				-- // ORB SWOOP: dip into the cluster, hold for the dwell, climb back //--
+				local swooping = false
+				-- orb collection works in EVERY mode: Orbit Center swoops down to
+				-- the cluster too (it used to be hover-only and never collected)
+				if farmCollectOn and orbC then
+					local groundY = groundBelow(orbC.X, orbC.Z, 60) or myGroundGuess
+					-- orb model pivot sits at pickup height +2 already (per the game's
+					-- CollectableClient): dip just under the orb pivot, and never above
+					-- the fight hover height (collect dips BELOW the hover, never rises)
+					local gy = groundBelow(fightC and fightC.X or myPos.X, fightC and fightC.Z or myPos.Z, 60) or myGroundGuess
+					local hoverCeiling = gy + hoverH - 5
+					local wantY = math.max(orbC.Y - 2, groundY + 4)
+					target = Vector3.new(orbC.X, math.min(wantY, hoverCeiling), orbC.Z)
+					swooping = true
+				end
+
+				-- // MOVE: hand the goal to the Heartbeat mover (smooth, per-frame) //--
+
+				-- Orbit Center = PURE orbit: never dodge anything (projectiles or
+				-- danger zones), just fly the circle
+				local dodge = Vector3.zero
+				if farmMode ~= "Orbit Center" then
+					dodge = projectileDodge(hrp, 0.05)
+					if os.clock() < dangerUntil then dodge = dodge + dodgeVec end
+				end
+
+				local goal = target + dodge
+
+				-- dodge bound: dodge offsets must stay NEAR the fight target — the
+				-- mover otherwise surfs across the map when projectiles keep coming
+				-- from one side (verified: +16 studs every 0.45s, never resets)
+				do
+					local off = goal - target
+					local maxOff = 25
+					if off.Magnitude > maxOff then goal = target + off.Unit * maxOff end
+				end
+
+				-- void guard: if the goal would be over empty space, pull back to my XZ
+				local goalGround = groundBelow(goal.X, goal.Z, 60)
+				if not goalGround then
+					goal = Vector3.new(myPos.X, target.Y, myPos.Z) + dodge
+				end
+
+				ensureMover()
+				moverGoal = goal
+				moverLook = lookT
+
+				task.wait(0.1)
+
+			end)
+
+			if not ok then warn("[FS Farm] " .. tostring(err)) end
+
+		end
+
+	end
+
+end
+
+_G.FS_StartAutoFarm = function(on)
+
+	farmOn = on
+
+	RS:SetAttribute("TPL_FarmOn", on)
+
+	if on and not farmThread then
+
+		farmThread = task.spawn(function()
+
+			farmLoop()
+
+			farmThread = nil
+
+		end)
+
+	end
+
+end
+
+_G.FS_StartAutoCollect = function(on)
+
+	farmCollectOn = on
+RS:SetAttribute("TPL_FarmCollectOn", on)
+
+end
+
+-- ===================== AUTO ENTER PORTAL (Final Swarm) =====================
+-- At the end of a round the Final Swarm starts and a BossPortal rises with a
+-- PortalPrompt (tag "portalPrompt") on it. Staying OUT of the portal grows the
+-- loot multiplier; walking in and holding the prompt ends the run and banks it.
+-- Auto Enter Portal parks the character at the portal and holds the prompt as
+-- soon as the multiplier reaches the target.
+-- How the game tracks it (verified in WaveDisplay / GameServiceClient):
+--   * HUD.Top.FinalSwarmBar.ProgressBar.Bar.CurrentMult is a NumberValue the
+--     HUD itself tweens every wave tick — reads as the live loot multiplier
+--   * the portal prompt only becomes usable when the HUD enabled it
+--   * ProximityPromptService:PromptButtonHoldBegan/Ended drive the custom HUD
+--     hold bar, so the prompt can be triggered without being near-screen
+do
+	local function getPortalPrompt()
+		local p = nil
+		pcall(function()
+			local map = workspace:FindFirstChild("Map")
+			local bp = map and map:FindFirstChild("BossPortal")
+			if bp then p = bp:FindFirstChild("PortalPrompt") end
+		end)
+		return p
+	end
+
+	-- live loot multiplier: 0 until the Final Swarm bar exists / fills
+	local function getCurrentMult()
+		local v = 0
+		pcall(function()
+			local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+			local hud = pg and pg:FindFirstChild("HUD")
+			local top = hud and hud:FindFirstChild("Top")
+			local bar = top and top:FindFirstChild("FinalSwarmBar")
+			local prog = bar and bar:FindFirstChild("ProgressBar")
+			local barPart = prog and prog:FindFirstChild("Bar")
+			local cur = barPart and barPart:FindFirstChild("CurrentMult")
+			v = cur and cur.Value or 0
+		end)
+		return tonumber(v) or 0
+	end
+
+	local function holdPortalPrompt(prompt)
+		-- fire the game's own hold flow: began -> wait the hold duration -> ended
+		pcall(function()
+			local PPS = game:GetService("ProximityPromptService")
+			PPS:TriggerPromptButtonHoldBegan(prompt)
+			task.wait(math.max(prompt.HoldDuration or 0, 0) + 0.35)
+			PPS:TriggerPromptButtonHoldEnded(prompt)
+		end)
+		-- belt and braces: some builds only accept the direct prompt signal
+		pcall(function()
+			prompt:InputHoldBegin()
+			task.wait(math.max(prompt.HoldDuration or 0, 0) + 0.35)
+			prompt:InputHoldEnd()
+		end)
+		-- last resort: real key hold at the prompt's screen position
+		pcall(function()
+			local VIM = game:GetService("VirtualInputManager")
+			local cam = workspace.CurrentCamera
+			local pp = prompt.Parent and (prompt.Parent.PrimaryPart or prompt.Parent:FindFirstChildWhichIsA("BasePart", true))
+			if VIM and pp and cam then
+				local sp, on = cam:WorldToViewportPoint(pp.Position)
+				if on then
+					VIM:SendKeyEvent(true, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
+					task.wait(math.max(prompt.HoldDuration or 0, 0) + 0.35)
+					VIM:SendKeyEvent(false, prompt.KeyboardKeyCode or Enum.KeyCode.E, false, game)
+				end
+			end
+		end)
+	end
+
+	local function autoPortalLoop()
+		if portalRunning then return end
+		portalRunning = true
+		while getFlag("AutoEnterPortalOn") and isCurrentGen() do
+			local okE, err = pcall(function()
+				if not inRound() then return end
+				local prompt = getPortalPrompt()
+				-- no portal yet, or the HUD hasn't armed it: nothing to do
+				if not prompt or not prompt.Enabled or prompt.MaxActivationDistance <= 0 then return end
+				local mult = getCurrentMult()
+				local target = tonumber(getFlag("PortalTargetMult")) or 3
+				-- not at the target multiplier yet: keep farming, keep banking later
+				if mult < target then return end
+				-- walk/park into the prompt's activation range first
+				local hrp = getCharacterHRP()
+				local holder = prompt.Parent
+				local pp = holder and (holder.PrimaryPart or holder:FindFirstChildWhichIsA("BasePart", true))
+				if not hrp or not pp then return end
+				local anchor = pp.Position + Vector3.new(0, 2, 0)
+				local deadline = os.clock() + 12
+				while os.clock() < deadline and getFlag("AutoEnterPortalOn") and inRound() do
+					-- inside activation range already?
+					if (hrp.Position - anchor).Magnitude <= math.min(prompt.MaxActivationDistance, 14) then break end
+					-- park through the flight mover when the farm drives it, else
+					-- set the pivot directly (portal prompt reads 3D distance)
+					if farmOn or farmCollectOn then
+						-- priority handoff: block the farm loop from writing moverGoal
+						-- for the whole walk, otherwise the two loops fight every frame
+						portalDriving = true
+						moverGoal = anchor
+						moverLook = anchor
+						ensureMover()
+					else
+						pcall(function() hrp.CFrame = CFrame.lookAt(anchor, anchor + Vector3.new(0, 0, 1)) end)
+					end
+					task.wait(0.1)
+				end
+				if not (getFlag("AutoEnterPortalOn") and inRound()) then portalDriving = false return end
+				-- still at/above target? (the multiplier can only go up, but the
+				-- toggle could have been flipped mid-walk)
+				if getCurrentMult() < (tonumber(getFlag("PortalTargetMult")) or 3) then
+					portalDriving = false
+					return
+				end
+				holdPortalPrompt(prompt)
+				-- run ends here either way: release the mover, turn the toggle off
+				portalDriving = false
+				RS:SetAttribute("TPL_AutoEnterPortalOn", false)
+				if _G.FS_Notify then pcall(function() _G.FS_Notify("Auto Enter Portal", "mult " .. string.format("%.2f", getCurrentMult()) .. " -> entered the portal") end) end
+				task.wait(3)
+			end)
+			if not okE then warn("[FS AutoPortal] " .. tostring(err)) end
+			-- hand the mover back no matter how the tick ended (error, timeout,
+			-- toggle off, or the portal fired) — the farm must never stay locked out
+			portalDriving = false
+			task.wait(0.5)
+		end
+		portalRunning = false
+	end
+	task.spawn(autoPortalLoop)
+	_G.FS_StartAutoPortal = function(on)
+		RS:SetAttribute("TPL_AutoEnterPortalOn", on)
+		if on then task.spawn(autoPortalLoop) end
+	end
+end
+
+local secFarm = tab:CreateSection({ name = "Auto Farm" })
+
+secFarm:CreateToggle({
+
+	name = "Auto Farm",
+
+	value = getFlag("FarmOn"),
+
+	callback = function(v)
+
+		if _G.FS_StartAutoFarm then _G.FS_StartAutoFarm(v) end
+
+	end,
+
+})
+
+-- mode-conditional settings: the dropdown shows/hides the elements that
+-- belong to each mode (SetVisible comes from the UI lib)
+local hoverElems, orbitElems = {}, {}
+
+local farmModeDD = secFarm:CreateDropdown({
+
+	name = "Farm Mode",
+
+	desc = "Auto-Dodge hovers over enemies and dodges; Orbit just circles the map center",			options = { "🧪 Auto-Dodge — In Testing", "Orbit Center" },
+		value = getFlag("FarmMode") or "Orbit Center",
+
+	callback = function(v)
+		if type(v) == "string" then
+			-- the display label carries the "In Testing" badge; strip it so the
+			-- saved flag stays the plain mode name every reader expects
+			RS:SetAttribute("TPL_FarmMode", (v == "🧪 Auto-Dodge — In Testing") and "Auto-Dodge" or v)
+			local orbit = (v == "Orbit Center")
+			for _, el in ipairs(hoverElems) do pcall(function() el.SetVisible(not orbit) end) end
+			for _, el in ipairs(orbitElems) do pcall(function() el.SetVisible(orbit) end) end
+		end
+	end,
+
+})
+
+local function regHover(el) table.insert(hoverElems, el) return el end
+local function regOrbit(el) table.insert(orbitElems, el) return el end
+
+regOrbit(secFarm:CreateSlider({
+
+	name = "Orbit Speed",
+
+	desc = "Orbit Center mode: degrees per second around the map center",
+
+	range = { 5, 180 },
+
+	increment = 5,
+
+	value = getFlag("Farm_OrbitSpeed") or 20,
+
+	callback = function(v) RS:SetAttribute("TPL_Farm_OrbitSpeed", v) end,
+
+}))
+
+regOrbit(secFarm:CreateSlider({
+
+	name = "Orbit Radius",
+
+	desc = "Orbit Center mode: distance from the map center (clamped to stay inside the map)",
+
+	range = { 10, 400 },
+
+	increment = 1,
+
+	value = getFlag("Farm_OrbitRadius") or 40,
+
+	callback = function(v) RS:SetAttribute("TPL_Farm_OrbitRadius", v) end,
+
+}))
+
+regOrbit(secFarm:CreateSlider({
+
+	name = "Orbit Height",
+
+	desc = "Orbit Center mode: height above the ground",
+
+	range = { 10, 80 },
+
+	increment = 1,
+
+	value = getFlag("Farm_OrbitHeight") or 28,
+
+	callback = function(v) RS:SetAttribute("TPL_Farm_OrbitHeight", v) end,
+
+}))
+
+regHover(secFarm:CreateSlider({
+
+	name = "Hover Height",
+
+	range = { 10, 80 },
+
+	increment = 1,
+
+	value = getFlag("Farm_Height"),
+
+	callback = function(v) RS:SetAttribute("TPL_Farm_Height", v) end,
+
+}))
+
+regHover(secFarm:CreateSlider({
+
+	name = "Hover Speed",
+
+	desc = "Auto-Dodge mode: how fast the character glides between hover points and dodges (higher = snappier)",
+
+	range = { 1, 30 },
+
+	increment = 1,
+
+	value = getFlag("Farm_Speed") or 7,
+
+	callback = function(v) RS:SetAttribute("TPL_Farm_Speed", v) end,
+
+}))
+
+-- // FARM DEBUG OVERLAY: makes farm internals visible in-world //--
+-- Cyan ball = hover goal the mover is gliding toward. Orange shells = VFX
+-- models flagged as OUR OWN shots (skipped by the dodge). Red shells = live
+-- threats that triggered the current dodge. Vertical beam = ground raycast
+-- result under the goal (nil => void-guard active, shown magenta).
+
+secFarm:CreateToggle({
+
+	name = "Auto Collect Orbs",
+
+	value = getFlag("FarmCollectOn"),
+
+	callback = function(v)
+
+		if _G.FS_StartAutoCollect then _G.FS_StartAutoCollect(v) end
+
+	end,
+
+})
+	secFarm:CreateToggle({
+		name = "Auto Smart Cards",
+		desc = "Picks the best level-up card for the hover farm (skips the spin animation when it can)",
+		value = getFlag("AutoSmartCardsOn"),
+		callback = function(v)
+			RS:SetAttribute("TPL_AutoSmartCardsOn", v)
+			if _G.FS_StartAutoSmartCards then _G.FS_StartAutoSmartCards(v) end
+		end,
+
+	})
+-- apply the initial visibility for the mode saved from the last run
+do
+	local orbit = ((getFlag("FarmMode") or "Orbit Center") == "Orbit Center")
+	for _, el in ipairs(hoverElems) do pcall(function() el.SetVisible(not orbit) end) end
+	for _, el in ipairs(orbitElems) do pcall(function() el.SetVisible(orbit) end) end
+end
+
+-- // ROUND END: second column — portal banking + what happens after the run //--
+local secRoundEnd = tab:CreateSection({ name = "Round End", column = 2 })
+
+secRoundEnd:CreateToggle({
+
+	name = "Auto Enter Portal",
+
+	desc = "When the loot multiplier reaches the target, walks to the Final Swarm portal and holds the prompt (ends the run)",
+
+	value = getFlag("AutoEnterPortalOn"),
+
+	callback = function(v)
+
+		RS:SetAttribute("TPL_AutoEnterPortalOn", v)
+
+		if _G.FS_StartAutoPortal then _G.FS_StartAutoPortal(v) end
+
+	end,
+
+})
+
+secRoundEnd:CreateSlider({
+
+	name = "Portal Target Multiplier",
+
+	desc = "Auto Enter Portal enters the portal once the loot multiplier reaches this value",
+
+	range = { 1, 20 },
+
+	increment = 1,
+
+	value = getFlag("PortalTargetMult") or 3,
+
+	callback = function(v)
+
+		if type(v) == "number" then RS:SetAttribute("TPL_PortalTargetMult", math.max(1, v)) end
+
+	end,
+
+})
+
+secRoundEnd:CreateToggle({
+
+	name = "Auto Replay",
+
+	desc = "When the round ends, rejoin the same map + difficulty",
+
+	value = getFlag("AutoReplayOn"),
+
+	callback = function(v)
+		RS:SetAttribute("TPL_AutoReplayOn", v)
+		if _G.FS_StartAutoReplay then _G.FS_StartAutoReplay(v) end
+	end,
+
+})
+
+secRoundEnd:CreateToggle({
+
+	name = "Auto Return Lobby",
+
+	desc = "When the round ends, press the game's own Lobby button (Continue)",
+
+	value = getFlag("AutoReturnLobbyOn"),
+
+	callback = function(v)
+		RS:SetAttribute("TPL_AutoReturnLobbyOn", v)
+		if _G.FS_StartAutoReturnLobby then _G.FS_StartAutoReturnLobby(v) end
+	end,
+
+})
+
+local farmStat = secFarm:CreateStat({ name = "Status", value = "idle" })
+
+task.spawn(function()
+
+	while true do
+
+		task.wait(2)
+
+		pcall(function()
+
+			local scan = getFarmScan()
+
+			if not inRound() then
+
+				farmStat.Set("lobby")
+
+			elseif scan then
+
+				farmStat.Set(scan.count .. " enemies")
+			else
+				farmStat.Set("no enemies")
+			end
+
+		end)
+
+	end
+
+end)
 
 -- ===================== MISC =====================
 
@@ -3048,13 +4712,9 @@ end
 
 -- Uses TPL_ flags + Reg so Configs can save them
 
-
-
 local UserInputService = game:GetService("UserInputService")
 
 local RunService = game:GetService("RunService")
-
-
 
 local function getHumanoid()
 
@@ -3063,8 +4723,6 @@ local function getHumanoid()
     return char and char:FindFirstChildOfClass("Humanoid")
 
 end
-
-
 
 local function setNoclip(on)
 
@@ -3091,8 +4749,6 @@ local function setNoclip(on)
     end)
 
 end
-
-
 
 -- Hide Name — UI Template uses Head.PlayerInfo (ContainerFrame.PlayerUserName)
 
@@ -3214,8 +4870,6 @@ local function applyHideName(on)
 
 end
 
-
-
 local hideNameOn = getFlag("HideNameOn")
 
 local noclipOn = getFlag("NoclipOn")
@@ -3240,8 +4894,6 @@ local function noclipLoop()
 
 end
 
-
-
 -- Walkspeed / Jump
 
 local defaultWalkSpeed = 16
@@ -3256,27 +4908,26 @@ pcall(function()
 
     if h then
 
-        defaultWalkSpeed = h.WalkSpeed
+        -- the game zeroes WalkSpeed/Jump on spawn and again between rounds;
+        -- only accept the captured value when it is a sane number
 
-        defaultJumpPower = h.JumpPower
+        if type(h.WalkSpeed) == "number" and h.WalkSpeed > 0 then defaultWalkSpeed = h.WalkSpeed end
 
-        defaultJumpHeight = h.JumpHeight
+        if type(h.JumpPower) == "number" and h.JumpPower > 0 then defaultJumpPower = h.JumpPower end
+
+        if type(h.JumpHeight) == "number" and h.JumpHeight > 0 then defaultJumpHeight = h.JumpHeight end
 
     end
 
 end)
 
-
-
 local currentWalkSpeed = getFlag("WalkSpeed") or defaultWalkSpeed
 
-if type(currentWalkSpeed) ~= "number" then currentWalkSpeed = defaultWalkSpeed end
+if type(currentWalkSpeed) ~= "number" or currentWalkSpeed <= 0 then currentWalkSpeed = defaultWalkSpeed end
 
 local currentJump = getFlag("JumpHeight") or defaultJumpHeight
 
-if type(currentJump) ~= "number" then currentJump = defaultJumpHeight end
-
-
+if type(currentJump) ~= "number" or currentJump <= 0 then currentJump = defaultJumpHeight end
 
 local function applyWalkSpeed(v)
 
@@ -3293,8 +4944,6 @@ local function applyWalkSpeed(v)
     end
 
 end
-
-
 
 local function applyJump(v)
 
@@ -3326,8 +4975,6 @@ local function applyJump(v)
 
 end
 
-
-
 -- keep WalkSpeed/Jump from being reset by game
 
 task.spawn(function()
@@ -3339,6 +4986,12 @@ task.spawn(function()
         local hum = getHumanoid()
 
         if hum then
+
+            -- never enforce a poisoned zero: snap back to a sane default first
+
+            if currentWalkSpeed <= 0 then currentWalkSpeed = defaultWalkSpeed end
+
+            if currentJump <= 0 then currentJump = defaultJumpHeight end
 
             if math.abs(hum.WalkSpeed - currentWalkSpeed) > 0.5 then
 
@@ -3370,8 +5023,6 @@ task.spawn(function()
 
 end)
 
-
-
 -- Fly
 
 local flyOn = getFlag("FlyOn") or false
@@ -3383,8 +5034,6 @@ if type(flySpeed) ~= "number" then flySpeed = 60 end
 local flyBV, flyBG, flyConn
 
 local flyKeys = { W=false, A=false, S=false, D=false, Space=false, Ctrl=false, Shift=false }
-
-
 
 local function stopFly()
 
@@ -3405,8 +5054,6 @@ local function stopFly()
     pcall(function() setNoclip(getFlag("NoclipOn")) end)
 
 end
-
-
 
 local function startFly()
 
@@ -3432,6 +5079,7 @@ local function startFly()
 
     flyBG.cframe = hrp.CFrame
 
+    fsWhitelist(flyBG)
     flyBG.Parent = hrp
 
     flyBV = Instance.new("BodyVelocity")
@@ -3440,6 +5088,9 @@ local function startFly()
 
     flyBV.maxForce = Vector3.new(9e9, 9e9, 9e9)
 
+    fsWhitelist(flyBV)
+    flyBG.Parent = hrp
+
     flyBV.Parent = hrp
 
     setNoclip(true)
@@ -3447,6 +5098,10 @@ local function startFly()
     flyConn = RunService.Heartbeat:Connect(function()
 
         if not flyOn or not isCurrentGen() then stopFly() return end
+
+        -- the AC reverts PlatformStand (silently now) — keep it asserted
+        local humNow = getHumanoid()
+        if humNow and not humNow.PlatformStand then humNow.PlatformStand = true end
 
         local char2 = Players.LocalPlayer.Character
 
@@ -3479,8 +5134,6 @@ local function startFly()
     end)
 
 end
-
-
 
 -- Input for fly
 
@@ -3522,8 +5175,6 @@ UserInputService.InputEnded:Connect(function(input)
 
 end)
 
-
-
 -- re-apply on respawn + watch for PlayerInfo recreation (game re-creates billboard)
 
 Players.LocalPlayer.CharacterAdded:Connect(function(char)
@@ -3564,8 +5215,6 @@ Players.LocalPlayer.CharacterAdded:Connect(function(char)
 
 end)
 
-
-
 -- also watch current character (if already spawned)
 
 pcall(function()
@@ -3589,8 +5238,6 @@ pcall(function()
     end
 
 end)
-
-
 
 -- UI
 
@@ -3630,11 +5277,7 @@ do
 
     })
 
-
-
     local utilSec = misc:CreateSection({ name = "Utilities" })
-
-
 
     utilSec:CreateToggle({
 
@@ -3655,8 +5298,6 @@ do
         end,
 
     })
-
-
 
     utilSec:CreateToggle({
 
@@ -3685,8 +5326,6 @@ do
         end,
 
     })
-
-
 
     local flySec = misc:CreateSection({ name = "Flight" })
 
@@ -3730,8 +5369,6 @@ do
 
 end
 
-
-
 -- init
 
 if hideNameOn then applyHideName(true) end
@@ -3739,10 +5376,6 @@ if hideNameOn then applyHideName(true) end
 if noclipOn and not noclipRunning then task.spawn(noclipLoop) end
 
 if flyOn then task.defer(function() task.wait(0.8) if getFlag("FlyOn") then startFly() end end) end
-
-
-
-
 
 -- ===================== CREDITS =====================
 
@@ -3763,7 +5396,7 @@ do
 
     teamSec:CreateLabel("Owner • sempai.real")
 
-    teamSec:CreateLabel("Game: " .. GAME_NAME)
+    creditsTeamGameLabel = teamSec:CreateLabel("Game: " .. GAME_NAME)
 
     local commSec = credits:CreateSection({ name = "Community", column = 1 })
 
@@ -3787,10 +5420,6 @@ do
 
 end
 
-
-
-
-
 -- ===================== CONFIGS =====================
 
 -- Named setups (toggles/sliders/dropdowns) saved to files + optional autoload
@@ -3806,13 +5435,9 @@ do
 
 	local Http = game:GetService("HttpService")
 
-
-
 	local canIO = typeof(writefile) == "function" and typeof(readfile) == "function"
 
 		and typeof(isfile) == "function" and typeof(makefolder) == "function"
-
-
 
 	local function ensureDir()
 
@@ -3982,17 +5607,11 @@ do
 
 	end
 
-
-
 	-- File management
 
 	local fileSec = cfgTab:CreateSection({ name = "Config Files" })
 
-
-
 	fileSec:CreateLabel(canIO and "Ready • File I/O available" or "File functions missing — executor unsupported")
-
-
 
 	local pendingName = ""
 
@@ -4007,8 +5626,6 @@ do
 		noreg = true,
 
 	})
-
-
 
 	local selected = nil
 
@@ -4030,8 +5647,6 @@ do
 
 	})
 
-
-
 	local function refreshList()
 
 		local names = listConfigs()
@@ -4044,13 +5659,9 @@ do
 
 	end
 
-
-
 	-- Actions
 
 	local actSec = cfgTab:CreateSection({ name = "Actions" })
-
-
 
 	actSec:CreateButton("Save Current Setup", function()
 
@@ -4086,8 +5697,6 @@ do
 
 	end)
 
-
-
 	actSec:CreateButton("Load Selected", function()
 
 		if not selected then window:Notify({ title = "Configs", content = "Select a config first" }) return end
@@ -4105,8 +5714,6 @@ do
 		window:Notify({ title = "Configs", content = "Loaded " .. selected .. " (" .. n .. ")" })
 
 	end)
-
-
 
 	actSec:CreateButton("Delete Selected", function()
 
@@ -4126,7 +5733,35 @@ do
 
 	end)
 
-
+	-- Auto Minimize on Start: when on, the NEXT script launch opens the window
+	-- already minimized (bare title bar). Persisted to its own file because the
+	-- window builds before any toggle exists to read.
+	local STARTMIN_FILE = "UITemplate/startmin.txt"
+	local function readStartMin()
+		local ok, v = pcall(function()
+			if not canIO or not isfile(STARTMIN_FILE) then return false end
+			return readfile(STARTMIN_FILE) == "1"
+		end)
+		return ok and v or false
+	end
+	local function writeStartMin(on)
+		pcall(function()
+			if canIO then ensureDir() writefile(STARTMIN_FILE, on and "1" or "0") end
+		end)
+	end
+	local minSec = cfgTab:CreateSection({ name = "Startup" })
+	local minimizeT
+	minimizeT = minSec:CreateToggle({
+		name = "Auto Minimize on Start",
+		desc = "Next launch of the script opens the window already minimized",
+		value = readStartMin(),
+		callback = function(v)
+			writeStartMin(v)
+			window:Notify({ title = "Configs", content = v and "Launches minimized from next start" or "Launches expanded" })
+		end,
+		noreg = true,
+	})
+	minimizeT.Set(readStartMin())
 
 	-- Autoload
 
@@ -4198,8 +5833,6 @@ do
 
 	})
 
-
-
 	local names = refreshList()
 
 	local cur = getAutoload()
@@ -4215,8 +5848,6 @@ do
 		autoloadEnabled = true
 
 	end
-
-
 
 	-- Autoload: apply a few seconds after start so the whole UI exists.
 
@@ -4252,8 +5883,6 @@ do
 
 end
 
-
-
 window:Notify({ title = "Final Swarm Hub", content = "Loaded! Press RightShift to toggle.", duration = 4 })
 
 end, function(e)
@@ -4263,4 +5892,3 @@ end, function(e)
 		showErrorBox("load", tostring(e) .. (tb ~= "" and ("\n" .. tb) or ""))
 	end)
 end)
-
